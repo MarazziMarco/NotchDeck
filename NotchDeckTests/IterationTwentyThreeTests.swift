@@ -65,7 +65,7 @@ final class CompactCapsuleTests: XCTestCase {
         XCTAssertLessThanOrEqual(CompactTimerLayout.ringStroke, 3.0)
     }
     func testGlyphSizeInRange() {
-        XCTAssertGreaterThanOrEqual(CompactTimerLayout.glyphSize, 12)
+        XCTAssertGreaterThanOrEqual(CompactTimerLayout.glyphSize, 11)   // reduced with the compact Focus capsule
         XCTAssertLessThanOrEqual(CompactTimerLayout.glyphSize, 15)
     }
     func testTimeTextSizeLargeEnough() {
@@ -73,9 +73,9 @@ final class CompactCapsuleTests: XCTestCase {
         XCTAssertLessThanOrEqual(CompactTimerLayout.timeTextSize, 24)
     }
     func testTimeTextNeverBelowFloor() {
-        XCTAssertGreaterThanOrEqual(CompactTimerLayout.timeTextMinSize, 20)
+        XCTAssertGreaterThanOrEqual(CompactTimerLayout.timeTextMinSize, 18)   // readable floor
         for v in [CompactTimerLayout.Variant.wide, .medium, .narrow] {
-            XCTAssertGreaterThanOrEqual(CompactTimerLayout.timeTextSize(for: v), 20)
+            XCTAssertGreaterThanOrEqual(CompactTimerLayout.timeTextSize(for: v), 18)
         }
     }
     func testTimeTextMinWidthFitsFiveChars() {

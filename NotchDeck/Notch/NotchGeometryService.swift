@@ -69,13 +69,20 @@ enum NotchGeometryService {
     /// (e.g. a running Pomodoro timer) while keeping it notch-like.
     /// - compactActivity: whether visible compact content exists. When false and
     ///   closed, the panel collapses to the physical-idle (notch-sized) geometry.
+    /// - compactWings: content-driven asymmetric wing widths (left, right) for the
+    ///   compact Focus timer. When nil, wings are the symmetric `compactExtraWidth`
+    ///   split used by other activities.
+    /// - compactActivityHeight: overrides the compact capsule height (Focus is
+    ///   shorter). Other activities keep the default.
     static func layout(
         for metrics: DisplayMetrics,
         state: NotchPresentationState,
         face: NotchFace,
         expandedContentHeight: CGFloat,
         compactExtraWidth: CGFloat = 0,
-        compactActivity: Bool = true
+        compactActivity: Bool = true,
+        compactWings: (left: CGFloat, right: CGFloat)? = nil,
+        compactActivityHeight: CGFloat? = nil
     ) -> NotchLayout {
         let cWidth = compactWidth(for: metrics) + compactExtraWidth
         let cHeight = compactHeight(for: metrics)
@@ -87,13 +94,24 @@ enum NotchGeometryService {
         // Strip height inside the panel: the taller capsule when closed, the
         // (unchanged) reserve when expanded.
         var stripHeight = cHeight
+        // Where the physical-notch centre sits within the panel (defaults to the
+        // panel centre for symmetric layouts).
+        var notchCentreInPanel: CGFloat? = nil
 
         switch state {
         case .compact:
             if compactActivity {
-                panelWidth = cWidth
-                panelHeight = compactCapsuleHeight
-                stripHeight = compactCapsuleHeight
+                let h = compactActivityHeight ?? compactCapsuleHeight
+                if let wings = compactWings, metrics.hasNotch {
+                    // Content-driven asymmetric Focus capsule: left + notch + right,
+                    // positioned so the notch region aligns with the hardware notch.
+                    panelWidth = wings.left + metrics.notchWidth + wings.right
+                    notchCentreInPanel = wings.left + metrics.notchWidth / 2
+                } else {
+                    panelWidth = cWidth
+                }
+                panelHeight = h
+                stripHeight = h
             } else {
                 // Physical idle: match the hardware notch exactly.
                 panelWidth = idle.width
@@ -112,10 +130,10 @@ enum NotchGeometryService {
             ) + cHeight
         }
 
-        // Center horizontally on the screen, pin the top of the panel to the
-        // top edge of the screen frame (global, bottom-left origin so top edge
-        // is frame.maxY).
-        let originX = metrics.frame.midX - panelWidth / 2
+        // Center on the screen so the notch region aligns with the hardware
+        // notch. Symmetric layouts centre the panel; the asymmetric Focus capsule
+        // pins its notch centre (not the panel centre) to the screen centre.
+        let originX = metrics.frame.midX - (notchCentreInPanel ?? panelWidth / 2)
         let originY = metrics.frame.maxY - panelHeight
         let panelFrame = CGRect(x: originX.rounded(),
                                 y: originY.rounded(),

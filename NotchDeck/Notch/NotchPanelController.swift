@@ -179,15 +179,23 @@ final class NotchPanelController {
         }
 
         // Closed & completely idle (no visible compact content) → collapse to the
-        // physical notch. Any live activity → the compact capsule.
-        let compactActivity = !environment.liveActivity.layout.isEmpty
+        // physical notch. Any live activity → the compact capsule. The compact
+        // FOCUS timer uses a shorter, content-driven asymmetric capsule.
+        let live = environment.liveActivity.layout
+        let compactActivity = !live.isEmpty
+        let isFocus = live.isFocusTimer && metrics.hasNotch
+        let focusWings: (left: CGFloat, right: CGFloat)? =
+            isFocus ? (CompactFocusGeometry.leftWingWidth, CompactFocusGeometry.rightWingWidth) : nil
+        let focusExtra = isFocus ? CompactFocusGeometry.totalExtraWidth : extra
         var layout = NotchGeometryService.layout(
             for: metrics,
             state: state,
             face: environment.appState.face,
             expandedContentHeight: contentResponsive.dashboardHeight,
-            compactExtraWidth: extra,
-            compactActivity: compactActivity)
+            compactExtraWidth: focusExtra,
+            compactActivity: compactActivity,
+            compactWings: focusWings,
+            compactActivityHeight: isFocus ? CompactFocusGeometry.visualHeight : nil)
 
         // Override the expanded frame with the responsive, edge-safe frame.
         if state == .expanded, let geo {
@@ -225,10 +233,15 @@ final class NotchPanelController {
     /// it's genuinely reachable by the pointer.
     private func updateHotZones(metrics: DisplayMetrics, layout: NotchLayout,
                                 state: NotchPresentationState) {
-        let cWidth = NotchGeometryService.compactWidth(for: metrics) + compactExtraWidth()
-        // Hover/activation follows the taller compact capsule so hovering the
-        // rounded ends (and the area just below) opens NotchDeck.
-        let cHeight = NotchGeometryService.compactVisualHeight(for: metrics)
+        let focus = isCompactFocus(metrics)
+        let cWidth = focus
+            ? metrics.notchWidth + CompactFocusGeometry.totalExtraWidth
+            : NotchGeometryService.compactWidth(for: metrics) + compactExtraWidth()
+        // Hover/activation follows the compact capsule so hovering the rounded
+        // ends (and the area just below) opens NotchDeck.
+        let cHeight = focus
+            ? CompactFocusGeometry.visualHeight
+            : NotchGeometryService.compactVisualHeight(for: metrics)
         let extraSide: CGFloat = 46
         let extraBelow: CGFloat = 16
         let activation = CGRect(
@@ -246,16 +259,29 @@ final class NotchPanelController {
         tracker.updateRects(compact: activation, expanded: expanded)
     }
 
+    /// The compact Focus timer (progress ring + emphasized MM:SS) on a notched
+    /// display uses the dedicated content-driven capsule.
+    private func isCompactFocus(_ metrics: DisplayMetrics) -> Bool {
+        metrics.hasNotch && environment.liveActivity.layout.isFocusTimer
+            && !environment.appState.isExpanded
+    }
+
     private func updateCompactLayoutInfo(metrics: DisplayMetrics) {
         let info = environment.notchLayout
         let idle = environment.liveActivity.layout.isEmpty && !environment.appState.isExpanded
+        let focus = isCompactFocus(metrics)
         info.hasNotch = metrics.hasNotch
         info.physicalNotchHeight = metrics.notchHeight
         info.physicalIdle = idle
-        // Idle collapses to the exact physical notch width; activity widens it.
+        info.compactFocus = focus
+        info.leftWingWidth = focus ? CompactFocusGeometry.leftWingWidth : 0
+        info.rightWingWidth = focus ? CompactFocusGeometry.rightWingWidth : 0
+        // Idle → exact notch width; Focus → content-driven; other activity → symmetric.
         info.compactPanelWidth = idle
             ? NotchGeometryService.physicalIdleSize(for: metrics).width
-            : NotchGeometryService.compactWidth(for: metrics) + compactExtraWidth()
+            : focus
+                ? metrics.notchWidth + CompactFocusGeometry.totalExtraWidth
+                : NotchGeometryService.compactWidth(for: metrics) + compactExtraWidth()
         info.housingWidth = metrics.hasNotch ? metrics.notchWidth : 0
     }
 

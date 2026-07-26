@@ -15,6 +15,12 @@ final class NotchLayoutInfo: ObservableObject {
     @Published var physicalNotchHeight: CGFloat = 0
     /// True while collapsed with no visible compact activity (physical-idle).
     @Published var physicalIdle: Bool = false
+    /// Compact Focus timer uses content-driven asymmetric wings.
+    @Published var compactFocus: Bool = false
+    /// Explicit wing widths (used only for compact Focus). When 0, fall back to
+    /// the symmetric `wingWidth`.
+    @Published var leftWingWidth: CGFloat = 0
+    @Published var rightWingWidth: CGFloat = 0
 
     /// Usable wing width on each side of the housing.
     var wingWidth: CGFloat {

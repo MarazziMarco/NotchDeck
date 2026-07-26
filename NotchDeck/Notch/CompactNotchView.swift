@@ -45,11 +45,23 @@ struct CompactNotchView: View {
     // MARK: Wings
 
     @ViewBuilder private func wings<L: View, T: View>(leading: L, trailing: T) -> some View {
-        if layout.hasNotch {
-            // Right wing begins AFTER the physical-notch exclusion zone plus an
-            // explicit safe inset, so its first icon clears the camera housing on
-            // real notched displays. Applied to the container (icon-to-icon spacing
-            // unchanged); a trailing outer pad keeps the last icon off the edge.
+        if layout.hasNotch && layout.compactFocus {
+            // Dedicated compact FOCUS layout: content-driven asymmetric wings. The
+            // timer icon hugs the outer-left edge (no big centred left container);
+            // the time label sits just past the notch-safe inset on the right.
+            HStack(spacing: 0) {
+                leading
+                    .frame(width: layout.leftWingWidth, alignment: .leading)
+                    .padding(.leading, CompactFocusGeometry.leadingOuterPadding)
+                Color.clear.frame(width: layout.housingWidth)   // physical-notch exclusion
+                trailing
+                    .frame(width: layout.rightWingWidth, alignment: .leading)
+                    .padding(.leading, CompactFocusGeometry.notchSafeInset)
+                    .padding(.trailing, CompactFocusGeometry.trailingOuterPadding)
+            }
+        } else if layout.hasNotch {
+            // Other activities: symmetric wings; right wing clears the housing by
+            // the notch-safe inset with a trailing outer pad.
             HStack(spacing: 0) {
                 leading.frame(width: layout.wingWidth, alignment: .trailing).padding(.trailing, 6)
                 Color.clear.frame(width: layout.housingWidth)   // exclusion zone
@@ -68,23 +80,34 @@ struct CompactNotchView: View {
     }
 
     private var compactDiagnosticOverlay: some View {
-        ZStack(alignment: .top) {
+        let radius = layout.compactFocus ? CompactFocusGeometry.cornerRadius
+                                         : DesignTokens.Metrics.compactCornerRadius
+        let leftW = layout.compactFocus ? layout.leftWingWidth : layout.wingWidth
+        let rightW = layout.compactFocus ? layout.rightWingWidth : layout.wingWidth
+        return ZStack(alignment: .top) {
             // Rounded clipping silhouette of the compact capsule / idle mask.
-            BottomRoundedShape(radius: DesignTokens.Metrics.compactCornerRadius)
+            BottomRoundedShape(radius: radius)
                 .stroke(layout.physicalIdle ? .gray : .cyan, lineWidth: 1)
-            // Magenta line = bottom of the physical hardware notch. If the visible
-            // frame extends below this while idle, the shape is bigger than the notch.
+            // Magenta line = bottom of the physical hardware notch.
             Rectangle().fill(Color(red: 1, green: 0, blue: 1)).frame(height: 1)
                 .offset(y: layout.physicalNotchHeight)
             HStack(spacing: 0) {
                 if layout.hasNotch {
-                    Rectangle().stroke(.green, lineWidth: 1).frame(width: layout.wingWidth)   // left wing
+                    // Left wing; for Focus, the outer-leading padding band is shown.
+                    ZStack(alignment: .leading) {
+                        Rectangle().stroke(.green, lineWidth: 1).frame(width: leftW)
+                        if layout.compactFocus {
+                            Rectangle().fill(Color.yellow.opacity(0.3))
+                                .frame(width: CompactFocusGeometry.leadingOuterPadding)
+                        }
+                    }
                     Rectangle().stroke(.red, lineWidth: 1).frame(width: layout.housingWidth)   // notch exclusion
                     // Right wing with the notch-safe inset band highlighted.
                     ZStack(alignment: .leading) {
-                        Rectangle().stroke(.blue, lineWidth: 1).frame(width: layout.wingWidth)
+                        Rectangle().stroke(.blue, lineWidth: 1).frame(width: rightW)
                         Rectangle().fill(Color.orange.opacity(0.3))
-                            .frame(width: CompactWingLayout.notchSafeInset)
+                            .frame(width: layout.compactFocus ? CompactFocusGeometry.notchSafeInset
+                                                              : CompactWingLayout.notchSafeInset)
                     }
                 } else {
                     Rectangle().stroke(.yellow, lineWidth: 1)
@@ -113,17 +136,40 @@ enum CompactWingLayout {
     }
 }
 
-/// Sizing for the compact Focus timer — a genuine ring + large MM:SS, not a
-/// tiny status dot. Semantic responsive variants shrink SECONDARY content
-/// (overflow / phase) before ever reducing the primary time text.
+/// One authoritative geometry model for the CLOSED compact Focus timer. All
+/// visible-frame, clipping, wing-width and hit-test math for compact Focus
+/// derives from here — no independent constants scattered across views.
+enum CompactFocusGeometry {
+    static let visualHeight: CGFloat = 39         // shorter capsule (was 44)
+    static let cornerRadius: CGFloat = 17         // ≈ half of 39 → clearly rounded
+    static let leadingOuterPadding: CGFloat = 9   // icon sits near the outer left edge
+    static let trailingOuterPadding: CGFloat = 12
+    static let notchSafeInset: CGFloat = 22       // clearance from the physical notch
+    static let timerDiameter: CGFloat = 22
+    static let timerStroke: CGFloat = 2.5
+    static let timerGlyphSize: CGFloat = 11.5
+    static let timeFontSize: CGFloat = 20
+    /// Measured width for "00:00" at 20pt monospaced semibold, plus a small margin.
+    static let timeTextWidth: CGFloat = 60
+
+    /// Content-driven wings — NOT equal. Left hugs the icon; right fits the text.
+    static var leftWingWidth: CGFloat { leadingOuterPadding + timerDiameter + notchSafeInset }
+    static var rightWingWidth: CGFloat { notchSafeInset + timeTextWidth + trailingOuterPadding }
+    /// Total width added beyond the physical notch.
+    static var totalExtraWidth: CGFloat { leftWingWidth + rightWingWidth }
+}
+
+/// Sizing for the compact Focus timer content — a genuine ring + MM:SS, not a
+/// tiny status dot. Values mirror `CompactFocusGeometry` (the ring and the
+/// emphasized MM:SS are Focus-specific in practice).
 enum CompactTimerLayout {
-    static let ringDiameter: CGFloat = 24
-    static let ringStroke: CGFloat = 2.8
-    static let glyphSize: CGFloat = 13        // timer glyph inside the ring
+    static let ringDiameter: CGFloat = CompactFocusGeometry.timerDiameter   // 22
+    static let ringStroke: CGFloat = CompactFocusGeometry.timerStroke       // 2.5
+    static let glyphSize: CGFloat = CompactFocusGeometry.timerGlyphSize     // 11.5
     static let symbolSize: CGFloat = 13       // non-progress compact symbol
-    static let timeTextSize: CGFloat = 22     // MM:SS
-    static let timeTextMinSize: CGFloat = 20  // readable floor (never below this)
-    static let timeTextMinWidth: CGFloat = 60 // room for "00:00" at 22pt mono
+    static let timeTextSize: CGFloat = CompactFocusGeometry.timeFontSize    // 20
+    static let timeTextMinSize: CGFloat = 18  // readable floor (never below this)
+    static let timeTextMinWidth: CGFloat = 56 // room for "00:00" at 20pt mono
     static let labelTextSize: CGFloat = 13    // status labels (e.g. "2 agents active")
     static let providerLogoSize: CGFloat = 18
 

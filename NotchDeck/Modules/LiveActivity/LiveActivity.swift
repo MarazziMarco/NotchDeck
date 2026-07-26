@@ -88,6 +88,15 @@ struct LiveActivityLayout: Equatable {
 
     static let empty = LiveActivityLayout()
     var isEmpty: Bool { leading == nil && trailing == nil }
+
+    /// True for the compact Focus timer: a progress ring on one wing and the
+    /// emphasized monospaced MM:SS on the other. Used to select the dedicated,
+    /// content-driven compact-Focus geometry (shorter capsule, asymmetric wings)
+    /// without coupling geometry to the Pomodoro module.
+    var isFocusTimer: Bool {
+        (leading?.progress != nil && trailing?.emphasize == true)
+            || (trailing?.progress != nil && leading?.emphasize == true)
+    }
 }
 
 /// Anything that can contribute a live activity (a service, agents, media…).

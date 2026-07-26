@@ -6,17 +6,22 @@ struct NotchRootView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var diagnostics: NotchDiagnostics
     @EnvironmentObject private var settings: SettingsStore
+    @EnvironmentObject private var notchLayout: NotchLayoutInfo
 
+    /// One authoritative radius per presentation: expanded, compact Focus (a
+    /// shorter capsule → smaller radius), or the default compact/idle radius.
     private var cornerRadius: CGFloat {
-        appState.isExpanded ? DesignTokens.Metrics.expandedCornerRadius
-                            : DesignTokens.Metrics.compactCornerRadius
+        if appState.isExpanded { return DesignTokens.Metrics.expandedCornerRadius }
+        if notchLayout.compactFocus { return CompactFocusGeometry.cornerRadius }
+        return DesignTokens.Metrics.compactCornerRadius
     }
 
     var body: some View {
         ZStack(alignment: .top) {
             // The panel base (keeps its own soft shadow — NOT clipped at root).
             NotchBackground(expanded: appState.isExpanded,
-                            intensity: settings.settings.backgroundIntensity)
+                            intensity: settings.settings.backgroundIntensity,
+                            compactRadius: cornerRadius)
             // Content is clipped to the SAME shape/radius as the base, so no
             // square widget corner or grey backing can peek past the rounded
             // bottom corners.
@@ -49,10 +54,12 @@ struct NotchRootView: View {
 struct NotchBackground: View {
     let expanded: Bool
     var intensity: BackgroundIntensity = .deepBlack
+    /// Compact/idle corner radius (compact Focus uses a smaller one). Expanded
+    /// ignores this.
+    var compactRadius: CGFloat = DesignTokens.Metrics.compactCornerRadius
 
     var body: some View {
-        let radius = expanded ? DesignTokens.Metrics.expandedCornerRadius
-                              : DesignTokens.Metrics.compactCornerRadius
+        let radius = expanded ? DesignTokens.Metrics.expandedCornerRadius : compactRadius
         ZStack {
             if expanded {
                 // Optional dark material for depth (off at Max Contrast), then a
