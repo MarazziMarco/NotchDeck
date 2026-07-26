@@ -1,0 +1,60 @@
+# ── Xcode / build ────────────────────────────────────────────────
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.moved-aside
+*.hmap
+*.ipa
+*.app
+*.dSYM.zip
+*.dSYM
+*.xcarchive
+
+# XcodeGen generates this from project.yml. project.yml is authoritative.
+NotchDeck.xcodeproj/
+
+# ── SwiftPM ──────────────────────────────────────────────────────
+.build/
+.swiftpm/
+Package.resolved
+
+# ── Signing / export artifacts ───────────────────────────────────
+*.p12
+*.cer
+*.certSigningRequest
+*.mobileprovision
+*.provisionprofile
+ExportOptions.plist
+
+# ── macOS ────────────────────────────────────────────────────────
+.DS_Store
+._*
+.AppleDouble
+.Spotlight-V100
+.Trashes
+
+# ── Local tooling / editor ───────────────────────────────────────
+.claude/
+.vscode/
+.idea/
+*.local.json
+.env
+.env.*
+
+# ── NotchDeck runtime / user-local data (never commit) ───────────
+# The app writes these under ~/Library/Application Support/NotchDeck at
+# runtime; listed here in case a working copy ever ends up in-tree.
+*.sock
+terminal-bridge.sock
+agent-hook.log
+*.log
+file-shelf.json
+FileShelf/
+pomodoro.json
+agent-sessions.json
+*.bookmark
+
+# ── Raw third-party brand-logo staging (already imported into the ──
+# asset catalogue; not needed to build and kept out of the public repo).
+loghiAgenti/
