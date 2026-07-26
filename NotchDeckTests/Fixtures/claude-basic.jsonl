@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"070cb7b3-7821-4c81-8417-8f1e9bd4ddb1","model":"claude-haiku-4-5-20251001","permissionMode":"default","tools":["Bash","Read"]}
+{"type":"system","subtype":"hook_started","hook_name":"SessionStart:startup"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"The user wants a single word."}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"pong"}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"pong","session_id":"070cb7b3-7821-4c81-8417-8f1e9bd4ddb1","num_turns":1}

@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"019f947a-94eb-7b22-b6d1-c4700317fe18"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"Looking at the project structure."}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"cat README.md"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Done. Everything looks good."}}
+{"type":"turn.completed","usage":{"input_tokens":120,"output_tokens":40}}
