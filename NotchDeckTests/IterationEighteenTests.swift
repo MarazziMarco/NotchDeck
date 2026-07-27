@@ -73,18 +73,13 @@ final class HomePresetGeometryTests: XCTestCase {
         XCTAssertGreaterThan(base * EditorialZoneWidth.prominent.multiplier,
                              base * EditorialZoneWidth.narrow.multiplier)
     }
-    func testMigrationFillsUnknownSizesWithMedium() {
-        let d = HomeCustomizationDraft.migrated(preset: nil, order: nil, hidden: [], widths: [:])
-        XCTAssertEqual(d.preset, .balanced)
-        for id in EditorialHomeLayout.defaultOrder { XCTAssertEqual(d.widths[id], .standard) }
-    }
-    func testMigrationPreservesKnownValues() {
-        let d = HomeCustomizationDraft.migrated(preset: .spacious, order: ["mirror", "quickNote"],
-                                                hidden: ["fileShelf"], widths: ["mirror": .prominent])
-        XCTAssertEqual(d.preset, .spacious)
-        XCTAssertEqual(d.order, ["mirror", "quickNote"])
-        XCTAssertEqual(d.hidden, ["fileShelf"])
-        XCTAssertEqual(d.widths["mirror"], .prominent)
+    func testEditorialSizesMapToRealDashboardSizes() {
+        XCTAssertEqual(EditorialZoneWidth(.small), .narrow)
+        XCTAssertEqual(EditorialZoneWidth(.medium), .standard)
+        XCTAssertEqual(EditorialZoneWidth(.large), .prominent)
+        XCTAssertEqual(EditorialZoneWidth.narrow.dashboardSize, .small)
+        XCTAssertEqual(EditorialZoneWidth.standard.dashboardSize, .medium)
+        XCTAssertEqual(EditorialZoneWidth.prominent.dashboardSize, .large)
     }
 }
 

@@ -5,32 +5,25 @@ import SwiftUI
 /// grid — Note / Now Playing / File Shelf / Mirror get intentional, distinct
 /// regions, with Mirror always rightmost by default.
 struct HomeEditorialView: View {
-    var minimal = false
+    var onCustomize: () -> Void = {}
     @EnvironmentObject private var registry: ModuleRegistry
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var responsive: NotchResponsiveLayoutService
-    @EnvironmentObject private var dashboard: DashboardModel
-    @EnvironmentObject private var appState: AppState
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiate
 
     @State private var page = 0
 
     private var layoutClass: NotchLayoutClass { responsive.current.layoutClass }
 
-    /// Enabled built-in Home modules in the configured order, minus hidden.
-    ///
-    /// This is a strict WHITELIST of enabled built-in Home-group ids: any stale
-    /// persisted id that is not a current built-in Home module — Community
-    /// (e.g. `community.system-pulse`), workspace or obsolete — is filtered out
-    /// defensively and can never render on Home.
+    private var definitions: [HomeModuleDefinition] {
+        HomeModuleEligibility.definitions(from: registry.allModules)
+    }
+
+    /// Stable eligible built-ins in the persisted order, filtered by the same
+    /// authoritative visibility source used by Customize Home.
     private var order: [String] {
-        let base = settings.settings.editorialOrder ?? EditorialHomeLayout.defaultOrder
-        let enabledHome = Set(registry.modules(in: .home).map(\.id))
-        var ids = base.filter { enabledHome.contains($0) && !settings.settings.editorialHidden.contains($0) }
-        // Append any enabled built-in home modules not in the default order.
-        for id in registry.modules(in: .home).map(\.id) where !ids.contains(id) { ids.append(id) }
-        if minimal { ids = Array(ids.prefix(2)) }
-        return ids
+        HomeLayoutNormalizer.visibleOrder(
+            in: settings.settings, definitions: definitions)
     }
 
     private var showDividers: Bool {
@@ -50,28 +43,49 @@ struct HomeEditorialView: View {
     }
 
     var body: some View {
-        VStack(spacing: 4) {
-            GeometryReader { geo in
-                let paged = EditorialHomeLayout.requiresPaging(
-                    order: order, ratios: classRatios, minWidths: EditorialHomeLayout.minWidths,
-                    contentWidth: geo.size.width, layoutClass: layoutClass)
-                let result = EditorialHomeLayout.layout(
-                    order: order, ratios: classRatios, contentSize: geo.size,
-                    layoutClass: layoutClass, page: page, paged: paged,
-                    dividerWidth: showDividers ? 1 : 0)
-                ZStack(alignment: .topLeading) {
-                    ForEach(result.zones) { zone in
-                        editorialWidget(for: zone.moduleID)
-                            .frame(width: zone.frame.width, height: zone.frame.height)
-                            .position(x: zone.frame.midX, y: zone.frame.midY)
-                            .accessibilityLabel(Text("\(registry.module(id: zone.moduleID)?.displayName ?? zone.moduleID) zone"))
-                    }
-                    if showDividers { dividers(zones: result.zones, height: geo.size.height) }
+        Group {
+            if order.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "house")
+                        .font(.system(size: 25))
+                        .foregroundStyle(DesignTokens.Palette.tertiaryText)
+                    Text(HomeEmptyState.title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(DesignTokens.Palette.primaryText)
+                    Text(HomeEmptyState.message)
+                        .font(.system(size: 11))
+                        .foregroundStyle(DesignTokens.Palette.secondaryText)
+                    Button("Customize Home", action: onCustomize)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .accessibilityLabel("Customize Home")
                 }
-                .onAppear { syncPage(pageCount: result.pageCount) }
-                .onChange(of: result.pageCount) { _, c in syncPage(pageCount: c) }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                VStack(spacing: 4) {
+                    GeometryReader { geo in
+                        let paged = EditorialHomeLayout.requiresPaging(
+                            order: order, ratios: classRatios, minWidths: EditorialHomeLayout.minWidths,
+                            contentWidth: geo.size.width, layoutClass: layoutClass)
+                        let result = EditorialHomeLayout.layout(
+                            order: order, ratios: classRatios, contentSize: geo.size,
+                            layoutClass: layoutClass, page: page, paged: paged,
+                            dividerWidth: showDividers ? 1 : 0)
+                        ZStack(alignment: .topLeading) {
+                            ForEach(result.zones) { zone in
+                                editorialWidget(for: zone.moduleID)
+                                    .frame(width: zone.frame.width, height: zone.frame.height)
+                                    .position(x: zone.frame.midX, y: zone.frame.midY)
+                                    .accessibilityLabel(Text("\(registry.module(id: zone.moduleID)?.displayName ?? zone.moduleID) zone"))
+                            }
+                            if showDividers { dividers(zones: result.zones, height: geo.size.height) }
+                        }
+                        .onAppear { syncPage(pageCount: result.pageCount) }
+                        .onChange(of: result.pageCount) { _, count in syncPage(pageCount: count) }
+                    }
+                    if pageCountForOrder > 1 { pager }
+                }
             }
-            if pageCountForOrder > 1 { pager }
         }
         // Preset-driven edge insets: leading before the first module, a larger
         // trailing after the Mirror, and bottom breathing room. Compact/Balanced/
@@ -80,10 +94,6 @@ struct HomeEditorialView: View {
         .padding(.trailing, tokens.trailingInset)
         .padding(.bottom, tokens.bottomBreathing)
         .animation(.easeInOut(duration: 0.22), value: settings.settings.homeLayoutPreset)
-        .sheet(isPresented: Binding(get: { dashboard.customizing },
-                                    set: { dashboard.customizing = $0 })) {
-            HomeCustomizationView()
-        }
     }
 
     private var pageCountForOrder: Int {
@@ -94,55 +104,6 @@ struct HomeEditorialView: View {
                 layoutClass: layoutClass) ? 2 : 1)
     }
 
-    /// Semantic customize row: reorder, width, hide, restore. No pixel resizing.
-    private var customizePanel: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(Array(order.enumerated()), id: \.element) { idx, id in
-                    HStack(spacing: 4) {
-                        Text(registry.module(id: id)?.displayName ?? id).font(.system(size: 9, weight: .medium))
-                        Button { move(id, by: -1) } label: { Image(systemName: "chevron.left").font(.system(size: 8)) }.buttonStyle(.plain)
-                        Button { move(id, by: 1) } label: { Image(systemName: "chevron.right").font(.system(size: 8)) }.buttonStyle(.plain)
-                        Menu {
-                            ForEach(EditorialZoneWidth.allCases) { w in
-                                Button(w.label) { settings.settings.editorialWidths[id] = w }
-                            }
-                        } label: { Image(systemName: "arrow.left.and.right").font(.system(size: 8)) }
-                            .menuStyle(.borderlessButton).fixedSize()
-                        Button { settings.settings.editorialHidden.append(id) } label: {
-                            Image(systemName: "eye.slash").font(.system(size: 8)).foregroundStyle(DesignTokens.Palette.statusFailure)
-                        }.buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, 6).padding(.vertical, 3)
-                    .background(DesignTokens.Palette.cardFill, in: Capsule())
-                    .foregroundStyle(DesignTokens.Palette.secondaryText)
-                }
-                Button("Restore") { restoreEditorial() }
-                    .buttonStyle(.plain).font(.system(size: 9, weight: .medium))
-                    .padding(.horizontal, 6).padding(.vertical, 3)
-                    .background(DesignTokens.Palette.cardFillHover, in: Capsule())
-            }
-            .padding(.horizontal, 2)
-        }
-        .frame(height: 24)
-    }
-
-    private func currentOrder() -> [String] {
-        settings.settings.editorialOrder ?? EditorialHomeLayout.defaultOrder
-    }
-    private func move(_ id: String, by delta: Int) {
-        var ids = order
-        guard let i = ids.firstIndex(of: id) else { return }
-        let j = max(0, min(ids.count - 1, i + delta))
-        ids.swapAt(i, j)
-        settings.settings.editorialOrder = ids
-    }
-    private func restoreEditorial() {
-        settings.settings.editorialOrder = nil
-        settings.settings.editorialHidden = []
-        settings.settings.editorialWidths = [:]
-    }
-
     @ViewBuilder private func editorialWidget(for id: String) -> some View {
         switch id {
         case "quickNote": EditorialNote()
@@ -150,9 +111,12 @@ struct HomeEditorialView: View {
         case "fileShelf": EditorialFileShelf()
         case "mirror": EditorialMirror()
         default:
-            // Built-in modules only. Community modules are intentionally NOT
-            // reachable here — they render in More.
-            if let module = registry.module(id: id) { module.makeWidget(size: .medium) }
+            if let module = registry.module(id: id) {
+                let size = HomeLayoutNormalizer.size(
+                    id, in: settings.settings, definitions: definitions)?.dashboardSize
+                    ?? module.defaultDashboardSize
+                module.makeDashboardCard(size: size)
+            }
         }
     }
 
@@ -185,4 +149,9 @@ struct HomeEditorialView: View {
         page = i
         settings.settings.homePageByClass[layoutClass.rawValue] = i
     }
+}
+
+enum HomeEmptyState {
+    static let title = "Your Home is empty"
+    static let message = "Choose which utilities appear here."
 }

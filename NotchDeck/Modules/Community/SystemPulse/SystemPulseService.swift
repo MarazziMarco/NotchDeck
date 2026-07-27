@@ -10,6 +10,7 @@ final class SystemPulseService: ObservableObject {
 
     private let provider: SystemMetricsProviding
     private var timer: Timer?
+    private var terminationObserver: NSObjectProtocol?
     /// Refresh cadence; changing it while active reschedules.
     var interval: TimeInterval = SystemPulseInterval.s15.seconds {
         didSet { if timer != nil { startTimer() } }
@@ -17,6 +18,11 @@ final class SystemPulseService: ObservableObject {
 
     init(provider: SystemMetricsProviding = SystemMetricsProvider()) {
         self.provider = provider
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: .notchDeckWillTerminate, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.deactivate() }
+        }
     }
 
     var isPolling: Bool { timer != nil }
@@ -44,5 +50,10 @@ final class SystemPulseService: ObservableObject {
 
     private func stopTimer() { timer?.invalidate(); timer = nil }
 
-    deinit { timer?.invalidate() }
+    deinit {
+        timer?.invalidate()
+        if let terminationObserver {
+            NotificationCenter.default.removeObserver(terminationObserver)
+        }
+    }
 }

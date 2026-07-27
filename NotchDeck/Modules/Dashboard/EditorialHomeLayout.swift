@@ -21,6 +21,24 @@ enum EditorialZoneWidth: String, Codable, CaseIterable, Identifiable {
     var multiplier: CGFloat { switch self { case .narrow: return 0.75; case .standard: return 1.0; case .prominent: return 1.35 } }
 }
 
+extension EditorialZoneWidth {
+    init(_ size: ModuleDashboardSize) {
+        switch size {
+        case .small: self = .narrow
+        case .medium: self = .standard
+        case .large: self = .prominent
+        }
+    }
+
+    var dashboardSize: ModuleDashboardSize {
+        switch self {
+        case .narrow: return .small
+        case .standard: return .medium
+        case .prominent: return .large
+        }
+    }
+}
+
 /// Home layout preset (density). Balanced is the default. Each preset yields a
 /// distinct set of geometry tokens actually consumed by production Home.
 enum HomeLayoutPreset: String, Codable, CaseIterable, Identifiable {

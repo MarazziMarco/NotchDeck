@@ -50,6 +50,18 @@ final class SettingsStore: ObservableObject {
         settings.moduleEnabled[id] = enabled
     }
 
+    /// Applies one atomic Home edit, normalizes it against stable catalogue
+    /// metadata, and flushes immediately so dismissal or termination cannot lose it.
+    func updateHomeLayout(definitions: [HomeModuleDefinition],
+                          _ update: (inout AppSettings) -> Void) {
+        var next = settings
+        HomeLayoutNormalizer.normalize(&next, definitions: definitions)
+        update(&next)
+        HomeLayoutNormalizer.normalize(&next, definitions: definitions)
+        settings = next
+        saveNow()
+    }
+
     /// Authoritative Agents-workspace enablement (see `AgentsModule`).
     var agentsEnabled: Bool { AgentsModule.isEnabled(settings) }
 }
