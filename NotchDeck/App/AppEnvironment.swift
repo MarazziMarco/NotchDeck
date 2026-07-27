@@ -88,7 +88,18 @@ final class AppEnvironment: ObservableObject {
             ScreenshotModule(),
             BatteryModule(),
         ]
-        self.registry = ModuleRegistry(modules: modules, settings: settings)
+        let registry = ModuleRegistry(modules: modules, settings: settings)
+        self.registry = registry
+
+        // One-time migration: strip Community (e.g. community.system-pulse),
+        // workspace and obsolete ids from any saved Home layout so a stale
+        // placement can never resurface on Home. Built-in Home order is preserved.
+        let eligibleHome = Set(registry.allModules.filter { registry.group(of: $0) == .home }.map(\.id))
+            .union(EditorialHomeLayout.defaultOrder)
+        if HomeLayoutNormalizer.needsNormalization(settings.settings, eligible: eligibleHome) {
+            HomeLayoutNormalizer.normalize(&settings.settings, eligible: eligibleHome)
+        }
+
         self.dashboard = DashboardModel(settings: settings, registry: registry)
 
         configure()

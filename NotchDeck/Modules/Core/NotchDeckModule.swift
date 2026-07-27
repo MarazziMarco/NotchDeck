@@ -56,6 +56,9 @@ enum ModuleSurface: String, CaseIterable, Codable, Equatable, Identifiable {
     /// A top-level workspace shown beside Utilities (currently only Agents).
     /// Never a Home card or a Utilities tab.
     case workspace
+    /// The secondary "More" utility surface. Community modules ALWAYS render here
+    /// and NEVER on Home (see `ModuleSurfaceRouting`).
+    case more
     var id: String { rawValue }
 }
 

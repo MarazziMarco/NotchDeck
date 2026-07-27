@@ -14,8 +14,34 @@ struct ModuleCatalogEntry: Identifiable, Equatable {
     let source: ModuleSource
     var id: String { descriptor.identifier }
 
-    /// Does this entry surface on Home? (affects enable/disable Home bridging).
-    var isHomeModule: Bool { descriptor.surfaces.contains(.homeCard) }
+    /// Does this entry surface on Home? Only BUILT-IN modules that explicitly
+    /// declare `.homeCard` are Home modules — Community and workspace modules are
+    /// never Home cards (see `ModuleSurfaceRouting`).
+    var isHomeModule: Bool { ModuleSurfaceRouting.rendersInHome(descriptor, source: source) }
+
+    /// Does this entry render in the More secondary-utility surface?
+    var isMoreModule: Bool { ModuleSurfaceRouting.rendersInMore(descriptor, source: source) }
+}
+
+/// THE authoritative surface-routing rule, enforced centrally for every current
+/// and future module — not a per-module special case.
+///
+///   ModuleSource.community  → More only, NEVER Home.
+///   Built-in                → Home only when it explicitly declares `.homeCard`.
+///   Workspace (Agents)      → neither Home nor More.
+enum ModuleSurfaceRouting {
+    /// Community (and, when surfaced, developer example) modules live in More.
+    static func rendersInMore(_ d: ModuleDescriptor, source: ModuleSource) -> Bool {
+        guard !d.surfaces.contains(.workspace) else { return false }
+        if source == .community || source == .example { return true }
+        return d.surfaces.contains(.more)
+    }
+
+    /// Only a built-in module that declares `.homeCard` renders on Home. A
+    /// Community module's obsolete `.homeCard` declaration is ignored here.
+    static func rendersInHome(_ d: ModuleDescriptor, source: ModuleSource) -> Bool {
+        source == .builtIn && d.surfaces.contains(.homeCard) && !d.surfaces.contains(.workspace)
+    }
 }
 
 /// Bridges a legacy `NotchModule` into a `ModuleDescriptor` for the catalogue —

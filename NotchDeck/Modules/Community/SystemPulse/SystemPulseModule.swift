@@ -13,12 +13,14 @@ struct SystemPulseModule: NotchDeckModule {
         category: .system,
         iconSystemName: "waveform.path.ecg",
         defaultEnabled: false,                       // community modules ship disabled
-        surfaces: [.homeCard, .settingsSection],
+        // Community modules render in More, never on Home (central rule).
+        surfaces: [.more, .settingsSection],
         capabilities: [],                            // least privilege
         hasSettings: true)
 
     init() {}
 
+    /// The module's compact card, rendered in the More → Community Modules section.
     func homeCard(context: ModuleContext) -> AnyView? { AnyView(SystemPulseCard()) }
     func settingsView(context: ModuleContext) -> AnyView? { AnyView(SystemPulseSettingsView()) }
 }

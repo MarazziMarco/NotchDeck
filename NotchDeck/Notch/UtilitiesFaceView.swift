@@ -104,19 +104,62 @@ struct GroupTabView: View {
     }
 }
 
-/// More tab: library entry + customization + future modules.
+/// More tab: enabled Community modules, the library entry, and More built-ins.
 struct MoreTabView: View {
     @EnvironmentObject private var registry: ModuleRegistry
+    @EnvironmentObject private var community: CommunityModuleRegistry
+    @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var appState: AppState
 
+    /// Enabled Community modules that route to More (central rule). Their obsolete
+    /// `.homeCard` declaration is ignored — they never render on Home.
+    private var enabledCommunity: [AnyNotchDeckModule] {
+        community.modules.filter { m in
+            ModuleSurfaceRouting.rendersInMore(m.descriptor, source: .community)
+                && ModuleEnablement.isEnabled(m.descriptor.identifier,
+                                              defaultEnabled: m.descriptor.defaultEnabled,
+                                              settings: settings.settings)
+        }
+    }
+
     var body: some View {
-        VStack(spacing: 10) {
-            CategoryEmpty(prompt: "Manage modules, add to Home, and configure",
-                          action: { appState.showingModuleLibrary = true },
-                          buttonTitle: "Open Module Library")
-            if !registry.modules(in: .more).isEmpty {
-                ScrollView { HomeGrid(modules: registry.modules(in: .more)) }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                communitySection
+                CategoryEmpty(prompt: "Manage modules, add to Home, and configure",
+                              action: { appState.showingModuleLibrary = true },
+                              buttonTitle: "Open Module Library")
+                if !registry.modules(in: .more).isEmpty {
+                    HomeGrid(modules: registry.modules(in: .more))
+                }
             }
+            .padding(.top, 2)
+        }
+    }
+
+    @ViewBuilder private var communitySection: some View {
+        let mods = enabledCommunity
+        if !mods.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Community Modules")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(DesignTokens.Palette.secondaryText)
+                    .accessibilityAddTraits(.isHeader)
+                ForEach(mods, id: \.descriptor.identifier) { module in
+                    if let card = module.homeCard() {
+                        card
+                            .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
+                            .background(DesignTokens.Palette.cardFill,
+                                        in: RoundedRectangle(cornerRadius: DesignTokens.Metrics.cardCornerRadius, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: DesignTokens.Metrics.cardCornerRadius, style: .continuous)
+                                .strokeBorder(DesignTokens.Palette.hairline, lineWidth: 0.6))
+                            .accessibilityElement(children: .contain)
+                            .accessibilityLabel(Text("\(module.descriptor.displayName), Community module"))
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
         }
     }
 }

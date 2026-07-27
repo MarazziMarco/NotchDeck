@@ -160,6 +160,8 @@ final class ModuleCatalogTests: XCTestCase {
         XCTAssertEqual(d.version, "1.0.0")
         XCTAssertFalse(d.defaultEnabled)
         XCTAssertTrue(d.capabilities.isEmpty, "no sensitive capabilities")
-        XCTAssertTrue(d.surfaces.contains(.homeCard))
+        // Community modules render in More, never on Home.
+        XCTAssertTrue(d.surfaces.contains(.more))
+        XCTAssertFalse(d.surfaces.contains(.homeCard))
     }
 }
