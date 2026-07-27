@@ -49,4 +49,7 @@ final class SettingsStore: ObservableObject {
     func setModuleEnabled(_ id: String, _ enabled: Bool) {
         settings.moduleEnabled[id] = enabled
     }
+
+    /// Authoritative Agents-workspace enablement (see `AgentsModule`).
+    var agentsEnabled: Bool { AgentsModule.isEnabled(settings) }
 }

@@ -18,7 +18,9 @@ struct ModulesScreen: View {
                 LegacyModuleAdapter.descriptor(
                     id: m.id, name: m.displayName, icon: m.iconName,
                     defaultEnabled: m.defaultEnabled, hasSettings: Self.legacyHasSettings(m.id))
-            },
+            }
+            // Agents is a built-in TOP-LEVEL WORKSPACE (not a Home card / tab).
+            + [AgentsModule.descriptor],
             community: community.descriptors,
             example: [UptimeExampleModule.descriptor],
             includeExample: Self.showExamples(settings.settings.showDeveloperModules))
@@ -218,6 +220,16 @@ struct ModuleDetailSheet: View {
                         Divider()
                         Text("Settings").font(.headline)
                         SystemPulseSettingsView()
+                    }
+                    if d.identifier == AgentsModule.identifier {
+                        Divider()
+                        Text("Integration").font(.headline)
+                        Text(AgentsModuleStrings.hookExplanation)
+                            .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button(AgentsModuleStrings.manageIntegration) {
+                            SettingsWindowPresenter.shared.show(section: .agents)
+                        }.controlSize(.small)
                     }
                 }
                 .padding(16)

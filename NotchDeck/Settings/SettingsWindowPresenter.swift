@@ -1,5 +1,14 @@
 import AppKit
 import SwiftUI
+import Combine
+
+/// Cross-view request to select a specific Settings section (deep-linking, e.g.
+/// "Manage Agent Integration" jumping to Coding Agents).
+@MainActor
+final class SettingsRoute: ObservableObject {
+    static let shared = SettingsRoute()
+    @Published var requested: SettingsRootView.Section?
+}
 
 /// Presents the Settings window as a standard, focusable `NSWindow` hosting
 /// SwiftUI. Kept separate from the borderless notch panel so text fields and
@@ -35,6 +44,12 @@ final class SettingsWindowPresenter: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
+    }
+
+    /// Show Settings and select a specific section.
+    func show(section: SettingsRootView.Section) {
+        SettingsRoute.shared.requested = section
+        show()
     }
 
     func hide() {

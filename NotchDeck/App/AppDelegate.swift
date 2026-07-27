@@ -39,19 +39,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeys.start()
         self.hotkeys = hotkeys
 
-        // Wire the terminal bridge into the coordinator and start it if any
-        // terminal integration is enabled.
+        // Wire the terminal bridge into the coordinator, then let the Agents
+        // workspace controller own the runtime lifecycle (socket, monitoring,
+        // compact suppression, native fallback) based on the module toggle.
         environment.agents.terminalBridge = environment.terminalBridge
-        let s = environment.settings.settings
-        if s.codexTerminalIntegration || s.claudeTerminalIntegration {
-            Task { await environment.terminalBridge.start() }
-        }
+        environment.agentsWorkspace.start()
 
         Task {
             await environment.permissions.refresh()
             await environment.agents.refreshAvailability()
-            environment.agents.startExternalMonitoring()
-            environment.agents.startTerminalPresenceMonitoring()
         }
 
         // Auto-open the notch (without stealing focus) when a session newly needs
@@ -60,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self, weak environment] sessions in
                 guard let self, let environment,
+                      environment.settings.agentsEnabled,
                       environment.settings.settings.autoOpenOnApproval else { return }
                 let approvals = Set(sessions.filter { $0.status == .waitingForApproval }.map(\.id))
                 let fresh = approvals.subtracting(self.knownApprovalIDs)

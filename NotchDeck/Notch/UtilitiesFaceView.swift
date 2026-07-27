@@ -45,13 +45,16 @@ struct UtilitiesFaceView: View {
     private var layoutClass: NotchLayoutClass { responsive.current.layoutClass }
 
     var body: some View {
-        VStack(spacing: 6) {
+        // Utilities is the sole root workspace when Agents is disabled: the tab bar
+        // sits near the top content inset and the content follows immediately, with
+        // no leftover selector- or title-height spacer.
+        VStack(spacing: 4) {
             AdaptiveTabBar(selection: $tab,
                            labelMode: responsive.current.resolvedTabLabels,
                            layoutClass: layoutClass)
             content
         }
-        .padding(.top, 6)
+        .padding(.top, appState.agentsEnabled ? 4 : 2)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear {
             tab = UtilitiesTab(rawValue: settings.settings.lastUtilitiesTab) ?? .home
@@ -191,14 +194,18 @@ struct HomeTabView: View {
         }
         .onChange(of: dashboard.customizing) { _, c in appState.isCustomizingDashboard = c }
         .onDisappear { appState.isCustomizingDashboard = false }
+        // The visual "Home" title is removed (the tab bar already identifies the
+        // page); the semantic page title is preserved for VoiceOver.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text(UtilitiesTab.home.title))
     }
 
+    /// Customize affordances only — the redundant "Home" title has been removed.
+    /// The row still exists solely to host Customize / Add / Done while editing.
     private var header: some View {
         HStack(spacing: 8) {
-            Text("Home").font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(DesignTokens.Palette.secondaryText)
             if dashboard.customizing {
-                Text("· \(layoutClass.rawValue.capitalized)")
+                Text(layoutClass.rawValue.capitalized)
                     .font(.system(size: 9)).foregroundStyle(DesignTokens.Palette.tertiaryText)
             }
             Spacer()

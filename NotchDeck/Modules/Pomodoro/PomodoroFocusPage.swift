@@ -44,6 +44,11 @@ struct PomodoroFocusPage: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(DesignTokens.Metrics.contentPadding)
+        // No redundant "Focus" title is drawn (the tab bar identifies the page and
+        // the timer's phase label is meaningful state, not a heading). The semantic
+        // page title is preserved for VoiceOver.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text(UtilitiesTab.focus.title))
     }
 
     private var vertical: some View {

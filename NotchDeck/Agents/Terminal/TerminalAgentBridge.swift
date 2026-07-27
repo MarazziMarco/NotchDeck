@@ -45,6 +45,14 @@ actor TerminalAgentBridge {
     private var handlingMode: AgentPermissionHandlingMode = .notchWithTerminalFallback
     private var fallbackDelay: TimeInterval = 8
 
+    /// Whether the Agents UI module is available to present approvals. When the
+    /// Agents module is DISABLED the socket stays alive (a minimal responder) so
+    /// synchronous hooks never hang, but every incoming permission request is
+    /// released IMMEDIATELY to the provider's native terminal prompt. Nothing is
+    /// swallowed, auto-approved or indefinitely delayed.
+    private var uiAvailable: Bool = true
+    func setUIAvailable(_ available: Bool) { uiAvailable = available }
+
     init(store: AgentSessionStore, stats: TerminalBridgeStats) {
         self.store = store
         self.stats = stats
@@ -173,6 +181,15 @@ actor TerminalAgentBridge {
 
         if event.type == .permissionRequested, let rid = event.requestID {
             pendingApprovals[rid] = client
+            // Agents UI disabled: do not wait for an approval UI that will never
+            // appear. Release the helper at once so the provider shows its native
+            // terminal prompt (safe fallback, never auto-approve). Session state is
+            // still recorded below for history, minus any pending-approval UI.
+            if !uiAvailable {
+                await MainActor.run { [stats] in stats.recordDecoded(type: "fallback:ui-disabled", connectedTitle: "") }
+                releaseForFallback(requestID: rid)
+                return
+            }
         }
 
         // Helper acknowledged emitting the CLI decision → mark the approval as

@@ -14,6 +14,9 @@ final class AgentSessionStore: ObservableObject, LiveActivitySource {
     var showFailed: Bool = true
     var showExternal: Bool = true
     var completionActivitySeconds: Double = 8
+    /// When the Agents module is disabled, the store keeps its data (history is
+    /// preserved) but contributes NO compact live activity to the notch.
+    var compactSuppressed: Bool = false
 
     private let store: JSONFileStore<[AgentSession]>
 
@@ -86,6 +89,8 @@ final class AgentSessionStore: ObservableObject, LiveActivitySource {
 
     nonisolated func currentActivity() -> ResolvedActivity? {
         MainActor.assumeIsolated {
+            // Agents disabled → no compact agent state ever reaches the notch.
+            guard !compactSuppressed else { return nil }
             let now = Date()
             let active = activeSessions
             // Genuine approval requires a LIVE PendingApproval (not mere activity).

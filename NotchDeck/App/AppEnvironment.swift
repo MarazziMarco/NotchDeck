@@ -33,6 +33,8 @@ final class AppEnvironment: ObservableObject {
     let liveActivity: LiveActivityCoordinator
     /// Community-extensible module registry (System Pulse, …).
     let community: CommunityModuleRegistry
+    /// Owns the Agents runtime lifecycle driven by the module toggle.
+    let agentsWorkspace: AgentsWorkspaceController
     /// Set by AppDelegate; used by secondary windows to prepare the notch.
     weak var interaction: NotchInteractionCoordinator?
 
@@ -71,6 +73,9 @@ final class AppEnvironment: ObservableObject {
         let community = CommunityModuleRegistry()
         _ = try? community.register(SystemPulseModule.self)
         self.community = community
+
+        self.agentsWorkspace = AgentsWorkspaceController(
+            settings: settings, agents: self.agents, store: store, bridge: self.terminalBridge)
 
         let modules: [NotchModule] = [
             ClipboardModule(),

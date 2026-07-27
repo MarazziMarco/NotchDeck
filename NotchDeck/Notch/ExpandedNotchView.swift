@@ -30,9 +30,15 @@ struct ExpandedNotchView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            FaceSwitcher(selection: Binding(
-                get: { appState.face },
-                set: { appState.toggleFace(to: $0) }))
+            // The Utilities | Agents workspace selector appears ONLY while the
+            // Agents module is enabled. When disabled it is removed entirely — no
+            // capsule, no single "Utilities" label — and Utilities is the sole
+            // root workspace.
+            if appState.agentsEnabled {
+                FaceSwitcher(selection: Binding(
+                    get: { appState.face },
+                    set: { appState.toggleFace(to: $0) }))
+            }
             Spacer()
             // The ONLY control that toggles the pin. Being a Button, it consumes
             // its own tap and never reaches the background click monitor.

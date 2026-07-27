@@ -34,6 +34,7 @@ struct SettingsRootView: View {
     }
 
     @State private var selection: Section = .general
+    @ObservedObject private var route = SettingsRoute.shared
 
     var body: some View {
         NavigationSplitView {
@@ -48,6 +49,11 @@ struct SettingsRootView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .navigationTitle(selection.rawValue)
+        }
+        .onReceive(route.$requested) { req in
+            guard let req else { return }
+            selection = req
+            route.requested = nil
         }
     }
 

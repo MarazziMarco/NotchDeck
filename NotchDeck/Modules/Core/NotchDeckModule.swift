@@ -23,6 +23,7 @@ enum ModuleCapability: String, CaseIterable, Codable, Equatable, Identifiable {
     case mediaControl
     case notifications
     case backgroundExecution
+    case terminalAutomation
     var id: String { rawValue }
 
     /// Every listed capability is sensitive and must be reviewed before merge.
@@ -39,6 +40,7 @@ enum ModuleCapability: String, CaseIterable, Codable, Equatable, Identifiable {
         case .mediaControl: return "Media control"
         case .notifications: return "Notifications"
         case .backgroundExecution: return "Background execution"
+        case .terminalAutomation: return "Terminal Automation"
         }
     }
 }
@@ -51,6 +53,9 @@ enum ModuleSurface: String, CaseIterable, Codable, Equatable, Identifiable {
     case compactLiveActivity
     case settingsSection
     case backgroundService
+    /// A top-level workspace shown beside Utilities (currently only Agents).
+    /// Never a Home card or a Utilities tab.
+    case workspace
     var id: String { rawValue }
 }
 

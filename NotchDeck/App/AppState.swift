@@ -15,6 +15,11 @@ final class AppState: ObservableObject {
     @Published private(set) var presentation: NotchPresentationState = .compact
     @Published private(set) var face: NotchFace = .utilities
 
+    /// Single authoritative UI flag for whether the Agents workspace is enabled.
+    /// Views read THIS instead of re-deriving the check, so the enabled/disabled
+    /// behaviour lives in one place. Mirrors `AppSettings.moduleEnabled`.
+    @Published private(set) var agentsEnabled: Bool = true
+
     /// The ONLY sticky keep-open state. Toggled solely by the Pin button.
     @Published private(set) var isPinnedByUser: Bool = false
 
@@ -43,11 +48,41 @@ final class AppState: ObservableObject {
 
     private var machine = NotchStateMachine()
     private let settings: SettingsStore
+    private var cancellables = Set<AnyCancellable>()
 
     init(settings: SettingsStore) {
         self.settings = settings
-        self.face = settings.settings.defaultFace
-        machine.switchFace(to: settings.settings.defaultFace)
+        self.agentsEnabled = settings.agentsEnabled
+        // Normalise a persisted `.agents` selection to `.utilities` when Agents is
+        // disabled, so no hidden Agents content is ever mounted.
+        let start = settings.agentsEnabled ? settings.settings.defaultFace : .utilities
+        self.face = start
+        machine.switchFace(to: start)
+
+        // React to Agents being enabled/disabled from Settings → Modules. This is
+        // the ONLY place the face is normalised, keeping the rule in one spot.
+        // @Published fires synchronously with the new value, so the face is
+        // normalised in the same runloop tick the toggle happens — no flash of
+        // Agents content and deterministic for tests.
+        settings.$settings
+            .map { AgentsModule.isEnabled($0) }
+            .removeDuplicates()
+            .sink { [weak self] enabled in self?.applyAgentsEnabled(enabled) }
+            .store(in: &cancellables)
+    }
+
+    /// Apply an Agents enable/disable transition. Disabling while Agents is the
+    /// current face switches to Utilities immediately and drops any agent focus.
+    /// Re-enabling never switches away from Utilities.
+    private func applyAgentsEnabled(_ enabled: Bool) {
+        agentsEnabled = enabled
+        guard !enabled else { return }
+        focusedAgentID = nil
+        // Do NOT persist `defaultFace` here: writing settings from inside its own
+        // change notification re-enters the publisher with a pre-commit value. It
+        // is unnecessary anyway — `init` re-normalises a persisted `.agents` to
+        // `.utilities` whenever Agents is disabled.
+        if machine.switchFace(to: .utilities) { sync() }
     }
 
     var reduceMotion: Bool {
@@ -104,6 +139,8 @@ final class AppState: ObservableObject {
     }
 
     func toggleFace(to target: NotchFace? = nil) {
+        // Agents is unreachable while disabled (no switcher, swipe ignored).
+        if !agentsEnabled, (target ?? face.toggled) == .agents { return }
         if machine.switchFace(to: target) {
             sync()
             settings.settings.defaultFace = machine.face
