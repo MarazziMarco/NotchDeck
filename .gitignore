@@ -44,15 +44,15 @@ ExportOptions.plist
 
 # ── NotchDeck runtime / user-local data (never commit) ───────────
 # The app writes these under ~/Library/Application Support/NotchDeck at
-# runtime; listed here in case a working copy ever ends up in-tree.
+# runtime. Patterns are anchored so they never match SOURCE paths such as
+# NotchDeck/Modules/FileShelf/.
 *.sock
 terminal-bridge.sock
 agent-hook.log
 *.log
-file-shelf.json
-FileShelf/
-pomodoro.json
-agent-sessions.json
+/file-shelf.json
+/pomodoro.json
+/agent-sessions.json
 *.bookmark
 
 # ── Raw third-party brand-logo staging (already imported into the ──
