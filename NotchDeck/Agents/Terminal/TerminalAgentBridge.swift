@@ -179,12 +179,13 @@ actor TerminalAgentBridge {
         }()
         lastSeen[uuid] = Date()
 
-        if event.type == .permissionRequested, let rid = event.requestID {
+        // The PreToolUse decision hook is the ONLY blocking channel; register its
+        // live connection so the app can answer THIS exact helper.
+        if event.type == .toolPermissionRequested, let rid = event.requestID {
             pendingApprovals[rid] = client
             // Agents UI disabled: do not wait for an approval UI that will never
-            // appear. Release the helper at once so the provider shows its native
-            // terminal prompt (safe fallback, never auto-approve). Session state is
-            // still recorded below for history, minus any pending-approval UI.
+            // appear. Release the helper at once so the provider resumes its native
+            // permission flow (safe fallback, never auto-approve).
             if !uiAvailable {
                 await MainActor.run { [stats] in stats.recordDecoded(type: "fallback:ui-disabled", connectedTitle: "") }
                 releaseForFallback(requestID: rid)
@@ -192,13 +193,21 @@ actor TerminalAgentBridge {
             }
         }
 
-        // Helper acknowledged emitting the CLI decision → the decision REALLY
-        // reached the provider's stdout. Only now apply the truthful outcome
-        // (status + summary) and dismiss the approval. Success here proves the
-        // provider will continue; native fallback cannot occur for this request.
-        if event.type == .decisionDelivered {
+        // PermissionRequest is the OBSERVER channel — NotchDeck never answers it
+        // (the CLI ignores its decision). If a helper is blocking on it (older
+        // builds), release it immediately to the native flow so it can never hang.
+        if event.type == .permissionRequested, let rid = event.requestID {
+            pendingApprovals[rid] = client
+            releaseForFallback(requestID: rid)
+            return
+        }
+
+        // Helper wrote+flushed the provider response. This proves ONLY that the
+        // bytes were emitted — the UI moves to "Sent to Claude" (`.sent`), never
+        // "Approved". Real acceptance is inferred later from provider progression.
+        if event.type == .responseWritten || event.type == .decisionDelivered {
             await MainActor.run { [store] in
-                store.update(id: uuid) { Self.applyDeliveryAck(&$0) }
+                store.update(id: uuid) { Self.applyResponseWritten(&$0) }
             }
             return
         }
@@ -256,6 +265,16 @@ actor TerminalAgentBridge {
         }
         if let cwd = event.cwd { s.projectPath = cwd }
 
+        // Provider progression: a PostToolUse (`toolCompleted`) for the tool whose
+        // decision we sent proves the CLI ACCEPTED it and continued — the only
+        // truthful basis for "Claude continued". Record it before the approval is
+        // cleared below. Correlated by tool-use id (never by timestamp/name).
+        if event.type == .toolCompleted, let ap = s.approval,
+           ap.state == .sent || ap.state == .sending,
+           ap.requestID == (event.toolUseID ?? ap.requestID) {
+            s.latestSummary = (ap.decidedAllow ?? true) ? "Claude continued" : "Tool denied"
+        }
+
         // A resolving event clears any live approval (tool executed / turn ended).
         if ApprovalClassifier.clearsApproval(event.type) {
             s.approval = nil
@@ -269,18 +288,20 @@ actor TerminalAgentBridge {
         case .userPromptSubmitted:
             s.status = .running
         case .toolStarted:
-            // PreToolUse — activity ONLY. Never approval.
+            // Legacy PreToolUse-as-activity (older helpers). Activity ONLY.
             s.status = .running
             let summary = AgentLatestMessage.sanitize(event.summary ?? event.toolName.map { "Using \($0)" } ?? "")
             if !summary.isEmpty { s.latestSummary = summary }
-        case .permissionRequested:
-            // Idempotent: a duplicate PermissionRequest for the same live request
-            // must not create a second approval.
+        case .toolPermissionRequested:
+            // AUTHORITATIVE decision channel (PreToolUse). Creates the approval.
+            // Idempotent: a duplicate for the same live tool-use must not create a
+            // second approval.
             if let existingApproval = s.approval, existingApproval.isLive,
                existingApproval.requestID == (event.requestID ?? "") {
                 return s
             }
-            let summary = AgentLatestMessage.sanitize(event.summary ?? "Permission requested")
+            let summary = AgentLatestMessage.sanitize(event.summary
+                ?? event.toolName.map { "\($0) — permission requested" } ?? "Permission requested")
             let fallbackDeadline = handlingMode == .notchWithTerminalFallback
                 ? now.addingTimeInterval(fallbackDelay) : nil
             s.status = .waitingForApproval
@@ -293,7 +314,7 @@ actor TerminalAgentBridge {
                 requestID: event.requestID ?? "",
                 toolUseID: event.toolUseID,
                 turnID: event.turnID,
-                rawEventName: "PermissionRequest",
+                rawEventName: "PreToolUse",
                 toolName: event.toolName,
                 summary: summary,
                 receivedAt: now,
@@ -302,6 +323,11 @@ actor TerminalAgentBridge {
                 handlingMode: handlingMode,
                 fallbackDeadline: fallbackDeadline,
                 nativePromptExpected: handlingMode.nativePromptExpected)
+        case .permissionRequested:
+            // OBSERVER only. The CLI does not consume this hook's decision, so it
+            // NEVER creates a NotchDeck approval — that would duplicate the
+            // PreToolUse transaction. It is a native-fallback / compatibility signal.
+            break
         case .toolCompleted:
             s.status = .running               // approval already cleared above
         case .agentStopped:
@@ -312,26 +338,28 @@ actor TerminalAgentBridge {
             }
         case .sessionEnded:
             s.status = .completed; s.requiresAttention = false; s.isBridgeConnected = false
-        case .heartbeat, .decisionDelivered:
+        case .heartbeat, .responseWritten, .decisionDelivered:
             break
         }
         return s
     }
 
-    /// Apply a delivery acknowledgement to a session (pure + unit-testable). The
-    /// truthful outcome — status + "Approved"/"Denied" — is applied ONLY here,
-    /// when the helper has confirmed emitting the provider response, and the
-    /// approval surface is dismissed. A late/duplicate ack is a no-op.
-    static func applyDeliveryAck(_ s: inout AgentSession) {
+    /// Apply a `responseWritten` acknowledgement (pure + unit-testable). This
+    /// proves ONLY that the helper wrote+flushed the provider response — NOT that
+    /// the provider accepted it. So the request moves to `.sent` ("Sent to
+    /// Claude"); it is NEVER shown as "Approved" here. The approval surface stays
+    /// briefly as a non-interactive "Sent…" state and is finalised to "Claude
+    /// continued" only when provider progression (PostToolUse) is observed, or
+    /// cleared by a resolving event. A late/duplicate ack is a no-op.
+    static func applyResponseWritten(_ s: inout AgentSession) {
         guard let approval = s.approval,
               approval.state == .sending || approval.state == .pending else { return }
         let allow = approval.decidedAllow ?? true
-        s.approval?.state = .delivered
-        s.status = allow ? .running : .interrupted
+        s.approval?.state = .sent
         s.requiresAttention = false
-        s.latestSummary = allow ? "Approved" : "Denied"
-        s.pendingApprovalRequestID = nil
-        s.approval = nil            // dismiss — delivery confirmed
+        s.latestSummary = allow ? "Sent to Claude" : "Denial sent to Claude"
+        // Keep the approval object (non-interactive) so the card can show "Sent…";
+        // a subsequent PostToolUse finalises it, or a resolving event clears it.
     }
 
     // MARK: Approvals

@@ -44,9 +44,10 @@ struct AgentSessionCard: View {
         VStack(alignment: .leading, spacing: 7) {
             headerRow
             if genuineApproval { approvalRow }
-            else if deliveryState == .sending { statusRow("Sending approval…", "arrow.up.circle", DesignTokens.Palette.secondaryText) }
-            else if deliveryState == .delivered { statusRow("Approved", "checkmark.circle.fill", DesignTokens.Palette.statusSuccess) }
-            else if deliveryState == .deliveryFailed { statusRow("Approval could not be delivered — answer in Terminal", "exclamationmark.triangle.fill", DesignTokens.Palette.statusFailure) }
+            else if deliveryState == .sending { statusRow("Sending to Claude…", "arrow.up.circle", DesignTokens.Palette.secondaryText) }
+            else if deliveryState == .sent { statusRow("Sent to Claude", "paperplane.fill", DesignTokens.Palette.secondaryText) }
+            else if deliveryState == .delivered { statusRow("Claude continued", "checkmark.circle.fill", DesignTokens.Palette.statusSuccess) }
+            else if deliveryState == .deliveryFailed { statusRow("Delivery failed — answer in Terminal", "exclamationmark.triangle.fill", DesignTokens.Palette.statusFailure) }
             else if deliveryState == .expired { statusRow("Request expired", "clock.badge.xmark", DesignTokens.Palette.tertiaryText) }
             else if fellBack { waitingInTerminalRow }
         }
@@ -130,9 +131,10 @@ struct AgentSessionCard: View {
     // MARK: Approval
 
     private var approvalRow: some View {
-        // DEBUG safety: an approval card must originate from a PermissionRequest.
-        assert(session.approval?.rawEventName == "PermissionRequest",
-               "Approval card without a PermissionRequest-backed PendingApproval")
+        // DEBUG safety: an approval card must originate from the authoritative
+        // PreToolUse decision hook (the channel the CLI actually consumes).
+        assert(session.approval?.rawEventName == "PreToolUse",
+               "Approval card without a PreToolUse-backed PendingApproval")
         return VStack(alignment: .leading, spacing: 6) {
             if let summary = session.approval?.summary, !summary.isEmpty {
                 Text(summary).font(.system(size: 11, weight: .medium))
@@ -168,7 +170,7 @@ struct AgentSessionCard: View {
 
     private var debugApprovalLabel: some View {
         #if DEBUG
-        return Text("PermissionRequest · request \(String((session.approval?.requestID ?? "").prefix(6)))")
+        return Text("PreToolUse · req \(String((session.approval?.requestID ?? "").prefix(6)))")
             .font(.system(size: 8, design: .monospaced))
             .foregroundStyle(DesignTokens.Palette.tertiaryText)
         #else

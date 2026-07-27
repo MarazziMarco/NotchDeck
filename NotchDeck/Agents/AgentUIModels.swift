@@ -450,8 +450,11 @@ enum TerminalFallbackDelay: String, Codable, CaseIterable, Identifiable {
 /// Classifies incoming bridge events strictly: only a genuine PermissionRequest
 /// creates an approval. PreToolUse (toolStarted) is ONLY activity.
 enum ApprovalClassifier {
+    /// Only the PreToolUse decision hook (`toolPermissionRequested`) creates an
+    /// approval — it is the channel the CLI actually honours. PermissionRequest
+    /// is an observer and PreToolUse-as-activity (`toolStarted`) is activity only.
     static func createsApproval(_ type: TerminalAgentEventType) -> Bool {
-        type == .permissionRequested
+        type == .toolPermissionRequested
     }
     /// Events that clear/resolve a live approval.
     static func clearsApproval(_ type: TerminalAgentEventType) -> Bool {
@@ -462,8 +465,9 @@ enum ApprovalClassifier {
     }
     static func reason(_ type: TerminalAgentEventType) -> String {
         switch type {
-        case .permissionRequested: return "PermissionRequest → genuine approval"
-        case .toolStarted: return "PreToolUse → activity only, never approval"
+        case .toolPermissionRequested: return "PreToolUse → authoritative decision, creates approval"
+        case .permissionRequested: return "PermissionRequest → observer only, never a duplicate approval"
+        case .toolStarted: return "PreToolUse activity → activity only, never approval"
         case .toolCompleted: return "PostToolUse → tool completed, clears approval"
         case .agentStopped: return "Stop → turn finished, clears approval"
         case .sessionEnded: return "SessionEnd → session finished, clears approval"
@@ -476,12 +480,17 @@ enum ApprovalClassifier {
 struct PendingApproval: Equatable, Codable {
     /// Delivery lifecycle. "Approved" (delivered) means the decision actually
     /// reached the live helper's stdout — never merely a UI click.
+    /// Truthful delivery lifecycle. NB: a socket write / a helper `responseWritten`
+    /// ack proves only that bytes were emitted — NOT that the provider accepted
+    /// them. "Claude continued" (`delivered`) is set ONLY when real provider
+    /// progression is observed (the gated tool actually ran).
     enum ResponseState: String, Codable, Equatable {
-        case pending          // awaiting the user
-        case sending          // decision written to the helper, awaiting ack
-        case delivered        // helper acknowledged emitting the CLI JSON → Approved
-        case deliveryFailed   // helper gone before ack → could not be delivered
-        case fellBack         // hybrid deadline passed → native terminal prompt
+        case pending          // "Waiting for decision" — awaiting the user
+        case sending          // "Sending to Claude" — decision being written to the helper
+        case sent             // "Sent to Claude" — response written+flushed, provider not yet confirmed
+        case delivered        // "Claude continued" — provider progression observed
+        case deliveryFailed   // "Delivery failed" — helper gone / write failed
+        case fellBack         // "Released to Terminal" — hybrid deadline → native prompt
         case expired          // decided too late / timed out
         case cancelled
         // Back-compat: a plain "answered" maps onto delivered semantics.

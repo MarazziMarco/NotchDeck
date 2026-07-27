@@ -39,7 +39,7 @@ final class TerminalProtocolTests: XCTestCase {
     }
 
     func testEventCodecRoundTrip() throws {
-        let event = TerminalAgentEvent(type: .permissionRequested, provider: .claudeCode,
+        let event = TerminalAgentEvent(type: .toolPermissionRequested, provider: .claudeCode,
                                        sessionID: "s1", cwd: "/tmp/p", timestamp: 123,
                                        toolName: "Bash", summary: "ls", requestID: "r1")
         let line = TerminalAgentCodec.encodeLine(event)!
@@ -79,7 +79,7 @@ final class TerminalBridgeReduceTests: XCTestCase {
     }
 
     func testPermissionRequestedNeedsApproval() {
-        let s = TerminalAgentBridge.reduce(existing: nil, id: id, event: event(.permissionRequested, requestID: "r9"))
+        let s = TerminalAgentBridge.reduce(existing: nil, id: id, event: event(.toolPermissionRequested, requestID: "r9"))
         XCTAssertEqual(s.status, .waitingForApproval)
         XCTAssertTrue(s.requiresAttention)
         XCTAssertEqual(s.pendingApprovalRequestID, "r9")

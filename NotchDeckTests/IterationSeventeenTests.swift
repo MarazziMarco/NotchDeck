@@ -82,21 +82,21 @@ final class ApprovalDeliveryTests: XCTestCase {
 // MARK: Installer — synchronous PermissionRequest hook, no async, single entry
 
 final class HookInstallerSyncTests: XCTestCase {
-    func testClaudePermissionRequestHasTimeoutAndNoAsync() {
+    func testClaudeDecisionHookHasTimeoutAndNoAsync() {
+        // The synchronous decision hook is now PreToolUse.
         let merged = HookInstaller.mergeHooks(base: [:], provider: .claudeCode, helper: "/tmp/h")
-        // Navigate to hooks.PermissionRequest[0].hooks[0]
         let hooks = ((merged["hooks"] as? [String: Any]))
-        let pr = (hooks?["PermissionRequest"] as? [[String: Any]])?.first
-        let inner = (pr?["hooks"] as? [[String: Any]])?.first
+        let pre = (hooks?["PreToolUse"] as? [[String: Any]])?.first
+        let inner = (pre?["hooks"] as? [[String: Any]])?.first
         XCTAssertEqual(inner?["timeout"] as? Int, HookTimeouts.claudeHookTimeoutSeconds)  // 30s, > helper 15s > UI 8s
         XCTAssertNil(inner?["async"])                         // synchronous
     }
-    func testPreToolUseHasNoTimeoutBlock() {
+    func testObserverPermissionRequestHasNoTimeoutBlock() {
         let merged = HookInstaller.mergeHooks(base: [:], provider: .claudeCode, helper: "/tmp/h")
         let hooks = (merged["hooks"] as? [String: Any])
-        let pre = (hooks?["PreToolUse"] as? [[String: Any]])?.first
-        let inner = (pre?["hooks"] as? [[String: Any]])?.first
-        XCTAssertNil(inner?["timeout"])                       // activity hook stays short-lived
+        let pr = (hooks?["PermissionRequest"] as? [[String: Any]])?.first
+        let inner = (pr?["hooks"] as? [[String: Any]])?.first
+        XCTAssertNil(inner?["timeout"])                       // observer hook stays short-lived
     }
     func testExactlyOnePermissionRequestEntryAfterReinstall() {
         var base = HookInstaller.mergeHooks(base: [:], provider: .claudeCode, helper: "/tmp/h")

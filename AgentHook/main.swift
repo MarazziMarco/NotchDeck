@@ -161,9 +161,15 @@ let sessionID = string(payload, ["session_id", "sessionId", "thread_id", "thread
 let cwd = string(payload, ["cwd", "workingDirectory", "project_dir"]) ?? FileManager.default.currentDirectoryPath
 let toolName = string(payload, ["tool_name", "toolName", "tool"])
 let summary = string(payload, ["command", "description", "message"]).map { String($0.prefix(200)) }
-let requestID = string(payload, ["request_id", "requestId"]) ?? UUID().uuidString
+// Correlation identity: prefer the provider's tool-use id (stable across the
+// PreToolUse decision and any later PermissionRequest/PostToolUse for the same
+// tool), then an explicit request id, else a generated id.
+let toolUseID = string(payload, ["tool_use_id", "toolUseId"])
+let requestID = toolUseID ?? string(payload, ["request_id", "requestId"]) ?? UUID().uuidString
 // Real hook event name from the CLI payload (for logging accuracy).
 let hookEventName = string(payload, ["hook_event_name", "hookEventName"]) ?? args.event.rawValue
+// The PreToolUse hook is the authoritative synchronous decision channel.
+let isDecisionHook = (args.event == .toolPermissionRequested)
 
 HookLog.line("event=\(hookEventName) provider=\(args.provider.cliName) session=\(abbreviated(sessionID)) helper=\(CommandLine.arguments.first ?? "?") socket=\(TerminalAgentProtocol.socketURL().path)")
 
@@ -179,7 +185,8 @@ var event = TerminalAgentEvent(
     ppid: getppid(),
     tty: currentTTY(),
     terminalApp: ProcessInfo.processInfo.environment["TERM_PROGRAM"],
-    requestID: args.event == .permissionRequested ? requestID : nil)
+    requestID: isDecisionHook ? requestID : (args.event == .permissionRequested ? requestID : nil),
+    toolUseID: toolUseID)
 
 let fd = connectSocket()
 if fd < 0 {
@@ -190,24 +197,27 @@ if fd < 0 {
 HookLog.line("socket connected")
 send(fd, event)
 
-if args.event == .permissionRequested {
+if isDecisionHook {
     // Block on the SAME live connection until a decision arrives (or the wait
-    // exceeds the app's fallback window). Timeout must be longer than the UI
-    // fallback (8s) so the user has time to choose — 25s here.
+    // exceeds the helper hard deadline). The deadline is longer than the app's UI
+    // fallback so the user has time to choose; the app sends an explicit release
+    // at its fallback deadline.
     if let decision = awaitDecision(fd, requestID: requestID,
                                     timeout: HookTimeouts.helperHardDeadlineSeconds) {
         HookLog.line("decision received: \(decision.behavior.rawValue)")
+        // Write ONLY the provider response to the original stdout, flush it, then
+        // notify the app that the bytes were written (NOT that the provider
+        // accepted them). No provider-facing descriptor is kept open afterwards.
         emitDecision(provider: args.provider, decision: decision)
-        // Acknowledge delivery so the app can show a truthful "Approved" (i.e. the
-        // decision really reached the CLI's stdout), not merely a UI click.
-        send(fd, TerminalAgentEvent(type: .decisionDelivered, provider: args.provider,
+        send(fd, TerminalAgentEvent(type: .responseWritten, provider: args.provider,
                                     sessionID: sessionID, timestamp: Date().timeIntervalSince1970,
-                                    requestID: requestID))
-        HookLog.line("decision delivered ack sent")
+                                    requestID: requestID, toolUseID: toolUseID))
+        HookLog.line("responseWritten ack sent")
     } else {
-        HookLog.line("decision TIMEOUT → native fallback (empty stdout)")
+        // Timeout / release → print nothing → CLI resumes its native permission
+        // flow. The helper does not wait for any further app message.
+        HookLog.line("no decision → native fallback (empty stdout)")
     }
-    // On timeout: print nothing → CLI falls back to its native prompt.
 }
 close(fd)
 HookLog.line("exit 0")

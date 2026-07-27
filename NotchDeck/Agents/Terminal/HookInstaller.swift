@@ -35,8 +35,11 @@ enum HookInstaller {
     /// backups are preserved).
     ///
     /// v2: PermissionRequest response corrected to the provider-valid
-    /// `hookSpecificOutput.permissionDecision` schema (was `decision:{behavior}`).
-    static let managedHookVersion = 2
+    ///     `hookSpecificOutput.permissionDecision` schema (was `decision:{behavior}`).
+    /// v3: PreToolUse is now the AUTHORITATIVE synchronous decision hook (the only
+    ///     hook whose permissionDecision the CLI consumes, verified live);
+    ///     PermissionRequest is a non-blocking observer.
+    static let managedHookVersion = 3
     static let managedVersionKey = "notchdeckHookVersion"
 
     // MARK: Helper install
@@ -88,8 +91,8 @@ enum HookInstaller {
         case .codex:
             return [
                 ("SessionStart", .sessionStarted, false),
-                ("PreToolUse", .toolStarted, true),          // activity only
-                ("PermissionRequest", .permissionRequested, false),
+                ("PreToolUse", .toolPermissionRequested, true),   // AUTHORITATIVE decision hook
+                ("PermissionRequest", .permissionRequested, false), // observer only
                 ("PostToolUse", .toolCompleted, false),
                 ("Stop", .agentStopped, false),
                 ("SessionEnd", .sessionEnded, false),
@@ -97,8 +100,8 @@ enum HookInstaller {
         case .claudeCode:
             return [
                 ("SessionStart", .sessionStarted, false),
-                ("PreToolUse", .toolStarted, true),          // activity only (was wrongly permission)
-                ("PermissionRequest", .permissionRequested, true),
+                ("PreToolUse", .toolPermissionRequested, true),   // AUTHORITATIVE decision hook
+                ("PermissionRequest", .permissionRequested, true),  // observer only (native fallback)
                 ("PostToolUse", .toolCompleted, true),
                 ("Stop", .agentStopped, false),
                 ("SessionEnd", .sessionEnded, false),
@@ -153,8 +156,11 @@ enum HookInstaller {
     /// current expected schema (managed marker) and timeout. Pure over a config
     /// dict for testability.
     static func configIsUpToDate(_ json: [String: Any], provider: TerminalAgentProvider) -> Bool {
+        // The synchronous decision hook is now PreToolUse (the CLI-honoured
+        // channel). Validate that entry is present, blocking, correctly timed and
+        // at the current managed version.
         guard let hooks = hooksDictionary(json, provider: provider),
-              let entries = hooks["PermissionRequest"] as? [[String: Any]] else { return false }
+              let entries = hooks["PreToolUse"] as? [[String: Any]] else { return false }
         let managed = entries.filter { containsMarker($0) }
         guard managed.count == 1, let inner = (managed[0]["hooks"] as? [[String: Any]])?.first else { return false }
         if inner["async"] != nil { return false }
@@ -219,7 +225,10 @@ enum HookInstaller {
             // longer than the app's 8s UI fallback so the user has time to choose.
             var hookDict: [String: Any] = ["type": "command", "command": cmd, managedKey: true,
                                            managedVersionKey: managedHookVersion]
-            if spec.event == .permissionRequested { hookDict["timeout"] = HookTimeouts.claudeHookTimeoutSeconds }
+            // The synchronous decision hook (PreToolUse) must be blocking with a
+            // timeout longer than the app's UI fallback so the user has time to
+            // decide before the CLI resumes its native flow.
+            if spec.event == .toolPermissionRequested { hookDict["timeout"] = HookTimeouts.claudeHookTimeoutSeconds }
             var entry: [String: Any] = ["hooks": [hookDict], managedKey: true]
             if spec.matcher { entry["matcher"] = "*" }
             var array = (hooks[spec.hookEvent] as? [[String: Any]]) ?? []

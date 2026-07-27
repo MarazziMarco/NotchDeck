@@ -38,13 +38,24 @@ public enum TerminalAgentEventType: String, Codable {
     case sessionResumed
     case userPromptSubmitted
     case toolStarted
+    /// AUTHORITATIVE synchronous decision channel. Fired from the PreToolUse hook,
+    /// which is the only hook whose `permissionDecision` the installed Claude CLI
+    /// actually consumes (verified live). This event CREATES the NotchDeck
+    /// approval and the helper blocks on it for the Allow/Deny decision.
+    case toolPermissionRequested
+    /// OBSERVER only. The PermissionRequest hook still fires (before the native
+    /// prompt) but the CLI does not consume its decision, so it never creates a
+    /// second approval for a PreToolUse transaction already represented.
     case permissionRequested
     case toolCompleted
     case agentStopped
     case sessionEnded
     case heartbeat
-    /// Helper → app acknowledgement that a decision was emitted to the CLI's
-    /// stdout (so the app shows "Approved" only after real delivery).
+    /// Helper → app: the provider response was written to stdout and flushed.
+    /// This proves the bytes were emitted — NOT that the provider parsed/accepted
+    /// them. The UI shows "Sent to Claude", never "Approved", on this signal.
+    case responseWritten
+    /// Deprecated alias of `responseWritten` (older helper builds).
     case decisionDelivered
 }
 
@@ -183,19 +194,23 @@ public struct TerminalAgentDecision: Codable, Equatable {
 ///
 /// stdout must contain ONLY this line; all diagnostics go to stderr / the log.
 public enum PermissionResponse {
-    /// The hook event name both providers register the synchronous helper under.
-    public static let hookEventName = "PermissionRequest"
+    /// The AUTHORITATIVE hook event whose `permissionDecision` the CLI consumes.
+    /// Verified live: a PreToolUse hook returning permissionDecision allow/deny is
+    /// honoured; a PermissionRequest hook's decision is not.
+    public static let decisionHookEvent = "PreToolUse"
 
-    /// Provider-valid decision JSON (no trailing newline). Deterministic key
-    /// order via sorted keys so it is exactly assertable in tests.
+    /// Provider-valid decision JSON (no trailing newline). `hookEvent` MUST equal
+    /// the firing hook event (the CLI validates it). Deterministic key order via
+    /// sorted keys so it is exactly assertable in tests.
     public static func json(provider: TerminalAgentProvider,
                             behavior: TerminalAgentDecision.Behavior,
-                            message: String?) -> String {
+                            message: String?,
+                            hookEvent: String = decisionHookEvent) -> String {
         let decision = behavior == .allow ? "allow" : "deny"
         let obj: [String: Any]
         switch provider {
         case .claudeCode, .codex:
-            var inner: [String: Any] = ["hookEventName": hookEventName,
+            var inner: [String: Any] = ["hookEventName": hookEvent,
                                         "permissionDecision": decision]
             if behavior == .deny {
                 inner["permissionDecisionReason"] = message ?? "Denied in NotchDeck"
@@ -212,8 +227,9 @@ public enum PermissionResponse {
     /// The exact bytes the helper writes to stdout: the JSON line + one newline.
     public static func stdoutLine(provider: TerminalAgentProvider,
                                   behavior: TerminalAgentDecision.Behavior,
-                                  message: String?) -> String {
-        json(provider: provider, behavior: behavior, message: message) + "\n"
+                                  message: String?,
+                                  hookEvent: String = decisionHookEvent) -> String {
+        json(provider: provider, behavior: behavior, message: message, hookEvent: hookEvent) + "\n"
     }
 }
 
