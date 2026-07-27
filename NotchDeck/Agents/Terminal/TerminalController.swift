@@ -19,14 +19,54 @@ struct TerminalController {
         }
         guard let tty = session.terminalTTY, !tty.isEmpty else { return .missingSessionTTY }
         guard terminalRunning() else { return .terminalNotRunning }
-        switch runAppleScriptDetailed(TerminalFocus.focusTTYScript(tty: tty)) {
-        case .success(let out):
-            if out.contains("ok") { return .found(TerminalTabReference(tty: TerminalFocus.normalizeTTY(tty))) }
-            return .ttyNotFound
+
+        // Every click enumerates the CURRENT Terminal state (indexes are never
+        // persisted) and matches by EXACT canonical TTY via the shared matcher —
+        // the same inventory + matcher terminal presence uses.
+        switch inventoryDetailed() {
         case .permissionDenied:
             return .automationPermissionDenied
         case .failure(let reason):
             return .enumerationFailed(reason)
+        case .success(let tabs):
+            guard TerminalTabMatching.match(tty: tty, in: tabs) != nil else {
+                AgentApprovalDiagnostics.recordTerminal("focus: no exact tab for \(TerminalTabMatching.canonical(tty))")
+                return .ttyNotFound   // definitive no-match (enumeration succeeded)
+            }
+            // Actuate: select the exact existing tab, raise/unminimise its window,
+            // activate Terminal. No new window/tab, no `do script`, no clipboard.
+            switch runAppleScriptDetailed(TerminalFocus.focusTTYScript(tty: tty)) {
+            case .success(let out):
+                if out.contains("ok") {
+                    AgentApprovalDiagnostics.recordTerminal("focus: selected \(TerminalTabMatching.canonical(tty))")
+                    return .found(TerminalTabReference(tty: TerminalTabMatching.canonical(tty)))
+                }
+                return .ttyNotFound
+            case .permissionDenied: return .automationPermissionDenied
+            case .failure(let reason): return .enumerationFailed(reason)
+            }
+        }
+    }
+
+    /// A fresh, structured inventory of every Terminal window/tab. `queryError`
+    /// (Automation/timeout/malformed) stays DISTINCT from a successful-but-empty
+    /// result so a transient failure never marks a running session Recent.
+    func inventory() -> [TerminalTabDescriptor] {
+        if case .success(let tabs) = inventoryDetailed() { return tabs }
+        return []
+    }
+
+    private enum InventoryOutcome: Equatable {
+        case success([TerminalTabDescriptor])
+        case permissionDenied
+        case failure(String)
+    }
+
+    private func inventoryDetailed() -> InventoryOutcome {
+        switch runAppleScriptDetailed(TerminalTabInventory.script()) {
+        case .success(let out): return .success(TerminalTabInventory.parse(out))
+        case .permissionDenied: return .permissionDenied
+        case .failure(let reason): return .failure(reason)
         }
     }
 
@@ -47,8 +87,12 @@ struct TerminalController {
 
     func enumerate() -> EnumerationResult {
         guard terminalRunning() else { return .terminalNotRunning }
-        guard let out = runAppleScript(TerminalFocus.enumerateTTYsScript()) else { return .queryError }
-        return .success(TerminalFocus.parseTTYList(out))
+        // Same structured inventory + canonical matcher Focus Terminal uses, so
+        // presence and focus can never disagree about whether a tab exists.
+        switch inventoryDetailed() {
+        case .success(let tabs): return .success(TerminalTabMatching.ttySet(tabs))
+        case .permissionDenied, .failure: return .queryError
+        }
     }
 
     /// The set of TTYs currently open in Terminal.app tabs (empty on error).
