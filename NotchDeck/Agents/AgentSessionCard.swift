@@ -29,7 +29,7 @@ struct AgentCardPresentation: Equatable {
         switch session.approval?.state {
         case .pending: state = "Permission requested"
         case .sending: state = "Sending decision"
-        case .sent, .helperExited: state = "Decision sent"
+        case .sent, .providerOutputClosed, .helperTerminated, .helperExited: state = "Decision sent"
         case .delivered: state = "Continued"
         case .deliveryFailed: state = "Delivery failed"
         case .fellBack: state = "Respond in Terminal"
@@ -49,7 +49,7 @@ struct AgentCardPresentation: Equatable {
 
         switch session.approval?.state {
         case .sending: deliveryLabel = "Sending to \(provider)…"
-        case .sent, .helperExited: deliveryLabel = "Sent to \(provider)"
+        case .sent, .providerOutputClosed, .helperTerminated, .helperExited: deliveryLabel = "Sent to \(provider)"
         case .delivered: deliveryLabel = "\(provider) continued"
         case .deliveryFailed: deliveryLabel = "Delivery failed — answer in Terminal"
         case .expired: deliveryLabel = "Request expired"
@@ -98,7 +98,7 @@ struct AgentSessionCard: View {
             headerRow
             if genuineApproval { approvalRow }
             else if deliveryState == .sending { statusRow(presentation.deliveryLabel ?? "Sending…", "arrow.up.circle", DesignTokens.Palette.secondaryText) }
-            else if deliveryState == .sent || deliveryState == .helperExited { statusRow(presentation.deliveryLabel ?? "Sent", "paperplane.fill", DesignTokens.Palette.secondaryText) }
+            else if deliveryState == .sent || deliveryState == .providerOutputClosed || deliveryState == .helperTerminated || deliveryState == .helperExited { statusRow(presentation.deliveryLabel ?? "Sent", "paperplane.fill", DesignTokens.Palette.secondaryText) }
             else if deliveryState == .delivered { statusRow(presentation.deliveryLabel ?? "Continued", "checkmark.circle.fill", DesignTokens.Palette.statusSuccess) }
             else if deliveryState == .deliveryFailed { statusRow("Delivery failed — answer in Terminal", "exclamationmark.triangle.fill", DesignTokens.Palette.statusFailure) }
             else if deliveryState == .expired { statusRow("Request expired", "clock.badge.xmark", DesignTokens.Palette.tertiaryText) }

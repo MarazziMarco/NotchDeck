@@ -253,7 +253,10 @@ if isDecisionHook {
                                         sessionID: sessionID, timestamp: Date().timeIntervalSince1970,
                                         requestID: requestID, transactionID: transactionID,
                                         toolUseID: toolUseID))
-        _ = send(fd, TerminalAgentEvent(type: .helperExited, provider: args.provider,
+        // Truthful hint: stdout was written+closed and the helper is about to
+        // exit. NOT a claim of actual termination — the bridge observes that as
+        // socket EOF after `close(fd)` below.
+        _ = send(fd, TerminalAgentEvent(type: .providerOutputClosed, provider: args.provider,
                                         sessionID: sessionID, timestamp: Date().timeIntervalSince1970,
                                         requestID: requestID, transactionID: transactionID,
                                         toolUseID: toolUseID))

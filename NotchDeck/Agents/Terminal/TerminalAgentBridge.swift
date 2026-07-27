@@ -206,11 +206,9 @@ actor TerminalAgentBridge {
             pendingApprovals[transactionID] = nil
             Task { @MainActor [store] in
                 store.update(id: connection.appSessionID) {
-                    Self.releaseTransaction(
-                        &$0,
-                        requestID: transactionID,
-                        state: .fellBack
-                    )
+                    // Socket EOF = the ACTUAL, externally-observed helper
+                    // termination (distinct from the self-emitted hint).
+                    Self.applyHelperTermination(&$0, requestID: transactionID)
                 }
             }
         }
@@ -308,10 +306,12 @@ actor TerminalAgentBridge {
             }
             return
         }
-        if event.type == .helperExited {
+        // Self-emitted "I closed stdout and am about to exit" hint. NOT proof of
+        // real termination (that is the socket-EOF path in `dropApprovals`).
+        if event.type == .providerOutputClosed || event.type == .helperExited {
             await MainActor.run { [store] in
                 store.update(id: uuid) {
-                    Self.applyHelperExited(&$0, requestID: event.transactionID)
+                    Self.applyProviderOutputClosed(&$0, requestID: event.transactionID)
                 }
             }
             return
@@ -392,8 +392,14 @@ actor TerminalAgentBridge {
             && s.approval?.state == .fellBack
             && s.queuedApprovalCount == 0
         if matchingProgress, let ap = s.approval,
-           ap.state == .sent || ap.state == .sending || ap.state == .helperExited,
+           ap.state == .sent || ap.state == .sending
+            || ap.state == .providerOutputClosed || ap.state == .helperTerminated
+            || ap.state == .helperExited,
            Self.providerProgressMatches(ap, event: event) {
+            // Provider progression (PostToolUse) with matching identity is the ONLY
+            // truthful basis for "continued" — mark `.delivered` before the
+            // resolving event clears the approval.
+            s.approval?.state = .delivered
             let name = s.provider.displayName
             s.latestSummary = (ap.decidedAllow ?? true) ? "\(name) continued" : "Tool denied"
         }
@@ -491,7 +497,7 @@ actor TerminalAgentBridge {
             }
         case .sessionEnded:
             s.status = .completed; s.requiresAttention = false; s.isBridgeConnected = false
-        case .heartbeat, .responseWritten, .helperExited, .decisionDelivered:
+        case .heartbeat, .responseWritten, .providerOutputClosed, .helperExited, .decisionDelivered:
             break
         }
         return s
@@ -517,13 +523,42 @@ actor TerminalAgentBridge {
         // a subsequent PostToolUse finalises it, or a resolving event clears it.
     }
 
-    static func applyHelperExited(_ s: inout AgentSession, requestID: String? = nil) {
+    /// The helper self-reported that it wrote+closed stdout and is about to exit.
+    /// Truthfully this is "provider output closed" — NOT proof the process has
+    /// terminated (see `applyHelperTermination`, driven by socket EOF) and NOT
+    /// proof the provider accepted the response.
+    static func applyProviderOutputClosed(_ s: inout AgentSession, requestID: String? = nil) {
         guard let approval = s.approval,
               requestID == nil || approval.requestID == requestID,
               approval.state == .sent || approval.state == .sending else { return }
-        s.approval?.state = .helperExited
+        s.approval?.state = .providerOutputClosed
         if s.queuedApprovalCount > 0 {
             Self.finishCurrentTransaction(&s)
+        }
+    }
+
+    /// Actual helper termination, observed EXTERNALLY by the bridge as socket EOF
+    /// (the helper's `close(fd)`/exit). If the transaction was already answered
+    /// (decision written), this is a clean end → `.helperTerminated` (provider
+    /// acceptance still pending, confirmed later by progression). If it was still
+    /// unanswered, the helper died without our decision → release to native flow.
+    static func applyHelperTermination(_ s: inout AgentSession, requestID: String) {
+        guard s.approval?.requestID == requestID else {
+            var queued = s.queuedApprovals ?? []
+            queued.removeAll { $0.requestID == requestID }
+            s.queuedApprovals = queued.isEmpty ? nil : queued
+            return
+        }
+        switch s.approval?.state {
+        case .pending, .sending, .none:
+            // Helper gone before a decision reached it → native flow owns it.
+            Self.releaseTransaction(&s, requestID: requestID, state: .fellBack)
+        default:
+            // Already answered (sent / providerOutputClosed / delivered).
+            s.approval?.state = .helperTerminated
+            s.pendingApprovalRequestID = nil
+            s.requiresAttention = false
+            if s.queuedApprovalCount > 0 { Self.finishCurrentTransaction(&s) }
         }
     }
 

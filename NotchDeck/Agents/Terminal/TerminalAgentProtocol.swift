@@ -62,8 +62,14 @@ public enum TerminalAgentEventType: String, Codable {
     /// This proves the bytes were emitted — NOT that the provider parsed/accepted
     /// them. The UI shows "Sent to Claude", never "Approved", on this signal.
     case responseWritten
-    /// Helper closed provider-facing stdout and is about to close its bridge
-    /// socket. Still not proof that the provider accepted the response.
+    /// Helper → app: the helper has written+closed the provider-facing stdout and
+    /// is ABOUT TO close its socket and exit. This is a self-emitted hint sent
+    /// while the helper is still alive — it is NOT proof the process terminated,
+    /// and NOT proof the provider accepted the response. Actual termination is
+    /// observed separately by the bridge as socket EOF.
+    case providerOutputClosed
+    /// Deprecated: an older helper self-emitted this before exiting. Treated as
+    /// `providerOutputClosed` (never as proof of real termination).
     case helperExited
     /// Deprecated alias of `responseWritten` (older helper builds).
     case decisionDelivered

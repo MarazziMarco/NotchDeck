@@ -500,17 +500,21 @@ struct PendingApproval: Equatable, Codable {
     /// them. "Claude continued" (`delivered`) is set ONLY when real provider
     /// progression is observed (the gated tool actually ran).
     enum ResponseState: String, Codable, Equatable {
-        case pending          // "Waiting for decision" — awaiting the user
-        case sending          // "Sending to Claude" — decision being written to the helper
-        case sent             // "Sent to Claude" — response written+flushed, provider not yet confirmed
-        case helperExited     // provider-facing stdout closed; provider acceptance not yet observed
-        case delivered        // "Claude continued" — provider progression observed
-        case deliveryFailed   // "Delivery failed" — helper gone / write failed
-        case fellBack         // "Released to Terminal" — hybrid deadline → native prompt
-        case expired          // decided too late / timed out
+        case pending             // "Waiting for decision" — awaiting the user
+        case sending             // "Sending to Claude" — decision being written to the helper
+        case sent                // "Sent to Claude" — response written+flushed, provider not yet confirmed
+        case providerOutputClosed // helper self-reported stdout closed + about-to-exit (NOT real termination)
+        case helperTerminated    // bridge observed the helper's socket EOF — process is actually gone
+        case delivered           // "Claude continued" — provider progression (PostToolUse) observed
+        case deliveryFailed      // "Delivery failed" — helper gone before answering / write failed
+        case fellBack            // "Released to Terminal" — hybrid deadline → native prompt
+        case expired             // decided too late / timed out
         case cancelled
         // Back-compat: a plain "answered" maps onto delivered semantics.
         case answered
+        // Deprecated: an older build persisted this for the self-emitted signal;
+        // decodes for compatibility and is treated as `providerOutputClosed`.
+        case helperExited
     }
     var provider: AgentProviderKind
     var sessionID: String
