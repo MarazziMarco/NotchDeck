@@ -94,10 +94,10 @@ final class AppEnvironment: ObservableObject {
         // One-time migration: strip Community (e.g. community.system-pulse),
         // workspace and obsolete ids from any saved Home layout so a stale
         // placement can never resurface on Home. Built-in Home order is preserved.
-        let eligibleHome = Set(registry.allModules.filter { registry.group(of: $0) == .home }.map(\.id))
-            .union(EditorialHomeLayout.defaultOrder)
-        if HomeLayoutNormalizer.needsNormalization(settings.settings, eligible: eligibleHome) {
-            HomeLayoutNormalizer.normalize(&settings.settings, eligible: eligibleHome)
+        let eligibleHome = HomeModuleEligibility.definitions(from: registry.allModules)
+        if HomeLayoutNormalizer.needsNormalization(settings.settings, definitions: eligibleHome) {
+            HomeLayoutNormalizer.normalize(&settings.settings, definitions: eligibleHome)
+            settings.saveNow()
         }
 
         self.dashboard = DashboardModel(settings: settings, registry: registry)
@@ -168,9 +168,24 @@ final class AppEnvironment: ObservableObject {
     /// active state (an explicit quit must not auto-resume the timer next launch;
     /// statistics / session count are preserved).
     func handleQuit() {
-        settings.saveNow()
-        fileShelf.handleSessionEnd()
-        pomodoro.resetActiveStateForQuit()
-        Task { await terminalBridge.stop() }
+        ApplicationShutdownSequence.perform(.init(
+            flushSettings: settings.saveNow,
+            stopModuleRefreshLoops: { [clipboard, downloads, nowPlaying, mirror] in
+                NotificationCenter.default.post(name: .notchDeckWillTerminate, object: nil)
+                clipboard.stopMonitoring()
+                downloads.stop()
+                nowPlaying.stop()
+                mirror.stop()
+            },
+            stopTransientObservers: { [agents, pointerTracker] in
+                agents.stopExternalMonitoring()
+                agents.stopTerminalPresenceMonitoring()
+                pointerTracker.stop()
+            },
+            endFileShelfSession: fileShelf.handleSessionEnd,
+            resetPomodoro: pomodoro.resetActiveStateForQuit,
+            requestBridgeShutdown: { [terminalBridge] in
+                Task { await terminalBridge.stop() }
+            }))
     }
 }

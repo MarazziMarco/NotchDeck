@@ -16,7 +16,9 @@ struct MenuBarContent: View {
             Button("Settings…") { SettingsWindowPresenter.shared.show() }
             Toggle("Launch at Login", isOn: launchAtLoginBinding)
             Divider()
-            Button("Quit NotchDeck") { NSApp.terminate(nil) }
+            Button("Quit NotchDeck") {
+                ApplicationTerminationCoordinator.shared.requestTermination()
+            }
         }
     }
 

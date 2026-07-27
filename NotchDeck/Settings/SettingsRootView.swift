@@ -35,11 +35,37 @@ struct SettingsRootView: View {
 
     @State private var selection: Section = .general
     @ObservedObject private var route = SettingsRoute.shared
+    private let termination: ApplicationTerminationRequesting
+
+    @MainActor
+    init() {
+        self.termination = ApplicationTerminationCoordinator.shared
+    }
+
+    @MainActor
+    init(termination: ApplicationTerminationRequesting) {
+        self.termination = termination
+    }
 
     var body: some View {
         NavigationSplitView {
-            List(Section.allCases, selection: $selection) { section in
-                Label(section.rawValue, systemImage: section.icon).tag(section)
+            VStack(spacing: 0) {
+                List(Section.allCases, selection: $selection) { section in
+                    Label(section.rawValue, systemImage: section.icon).tag(section)
+                }
+                Divider()
+                Button(role: .destructive) {
+                    termination.requestTermination()
+                } label: {
+                    Label(SettingsPersistentAction.quit.label,
+                          systemImage: SettingsPersistentAction.quit.icon)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .accessibilityLabel(SettingsPersistentAction.quit.accessibilityLabel)
             }
             .navigationSplitViewColumnWidth(190)
         } detail: {

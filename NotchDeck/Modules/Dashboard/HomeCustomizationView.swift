@@ -1,285 +1,215 @@
 import SwiftUI
 
-/// Single source of truth for the customization draft (order, visibility, size,
-/// preset) plus the opening snapshot restored on Cancel.
-struct HomeCustomizationDraft: Equatable {
-    var preset: HomeLayoutPreset
-    var order: [String]?
-    var hidden: [String]
-    var widths: [String: EditorialZoneWidth]
-
-    /// Migration: fill gaps without discarding known choices or module data.
-    static func migrated(preset: HomeLayoutPreset?, order: [String]?,
-                         hidden: [String], widths: [String: EditorialZoneWidth]) -> HomeCustomizationDraft {
-        let ids = order ?? EditorialHomeLayout.defaultOrder
-        var w = widths
-        for id in ids where w[id] == nil { w[id] = .standard }   // unknown sizes → Medium
-        return HomeCustomizationDraft(preset: preset ?? .balanced, order: order, hidden: hidden, widths: w)
-    }
-}
-
-/// Pure, shared reordering engine — the SINGLE source of truth used by the
-/// visual preview, the settings rows and keyboard actions. No separate
-/// preview-only order state exists.
 enum HomeReorder {
-    /// Move `drag` to occupy `target`'s slot. No-op for equal/unknown ids; never
-    /// duplicates.
     static func move(_ ids: [String], drag: String, onto target: String) -> [String] {
         guard drag != target,
               let from = ids.firstIndex(of: drag),
               let to = ids.firstIndex(of: target) else { return ids }
-        var out = ids
-        let moved = out.remove(at: from)
-        out.insert(moved, at: to)
-        return out
+        var output = ids
+        let moved = output.remove(at: from)
+        output.insert(moved, at: to)
+        return output
     }
-    /// Shift a module earlier (-1) / later (+1) — keyboard / context menu.
+
     static func shift(_ ids: [String], id: String, by delta: Int) -> [String] {
-        guard let i = ids.firstIndex(of: id) else { return ids }
-        let j = max(0, min(ids.count - 1, i + delta))
-        guard j != i else { return ids }
-        var out = ids
-        out.swapAt(i, j)
-        return out
+        guard let index = ids.firstIndex(of: id) else { return ids }
+        let destination = max(0, min(ids.count - 1, index + delta))
+        guard destination != index else { return ids }
+        var output = ids
+        output.swapAt(index, destination)
+        return output
     }
 }
-
-/// Polished Home customization sheet. Replaces the old inline per-module edit
-/// toolbars: the real Home stays intact behind this sheet and updates live.
-/// Native drag-to-reorder (no left/right arrow buttons), visibility toggles,
-/// size selectors, a density preset and Reset to Default. All choices persist.
+/// Compact, native editor backed directly by AppSettings. Every action persists
+/// immediately; Done only dismisses the sheet.
 struct HomeCustomizationView: View {
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var registry: ModuleRegistry
     @Environment(\.dismiss) private var dismiss
+    @FocusState private var focusedID: String?
 
-    /// Opening snapshot of the four customization fields, restored on Cancel.
-    @State private var snapshot: HomeCustomizationDraft?
-    @State private var hideWarning = false
-    /// Module currently being dragged (nil when idle). Cleared on drop/cancel.
-    @State private var dragging: String?
+    private var definitions: [HomeModuleDefinition] {
+        HomeModuleEligibility.definitions(from: registry.allModules)
+    }
 
-    private var order: [String] {
-        settings.settings.editorialOrder ?? EditorialHomeLayout.defaultOrder
+    private var orderedDefinitions: [HomeModuleDefinition] {
+        let byID = Dictionary(uniqueKeysWithValues: definitions.map { ($0.id, $0) })
+        return HomeLayoutNormalizer.order(in: settings.settings, definitions: definitions)
+            .compactMap { byID[$0] }
     }
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider().overlay(DesignTokens.Palette.separator)
-            presetRow
-            preview
-            Divider().overlay(DesignTokens.Palette.separator)
+            Divider()
             List {
-                ForEach(order, id: \.self) { id in moduleRow(id) }
-                    .onMove(perform: move)   // native drag-to-reorder (macOS)
+                ForEach(orderedDefinitions) { definition in
+                    row(definition)
+                        .dropDestination(for: String.self) { items, _ in
+                            guard let source = items.first else { return false }
+                            persist {
+                                HomeLayoutNormalizer.move(
+                                    source, before: definition.id,
+                                    in: &$0, definitions: definitions)
+                            }
+                            return true
+                        }
+                }
+                .onMove { source, destination in
+                    persist {
+                        HomeLayoutNormalizer.move(
+                            from: source, to: destination,
+                            in: &$0, definitions: definitions)
+                    }
+                }
             }
-            .listStyle(.plain).scrollContentBackground(.hidden)
-            if hideWarning {
-                Text("At least one module must stay visible.")
-                    .font(.system(size: 10)).foregroundStyle(DesignTokens.Palette.statusAttention)
-                    .padding(.bottom, 2)
-            }
-            Divider().overlay(DesignTokens.Palette.separator)
+            .listStyle(.inset)
+            .scrollContentBackground(.hidden)
+            Divider()
             footer
         }
-        .frame(width: 660, height: 560)
+        .frame(width: 540, height: 430)
         .background(DesignTokens.Palette.expandedSurface)
         .preferredColorScheme(.dark)
-        .onAppear { if snapshot == nil { snapshot = currentDraft() } }
-        .onDisappear { dragging = nil }   // clear a drag if the sheet closes mid-drag
-    }
-
-    /// A live simplified preview of the real Home row (order / width / visibility).
-    /// Cards are draggable to reorder — reordering updates the same draft the
-    /// production Home renders from.
-    private var preview: some View {
-        let visible = order.filter { !settings.settings.editorialHidden.contains($0) }
-        return HStack(spacing: max(4, settings.settings.homeLayoutPreset.tokens.moduleGap * 0.4)) {
-            ForEach(visible, id: \.self) { id in
-                let w = settings.settings.editorialWidths[id] ?? .standard
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(dragging == id ? DesignTokens.Palette.cardFillHover : DesignTokens.Palette.cardFill)
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(
-                        dragging == id ? DesignTokens.Palette.statusAttention : DesignTokens.Palette.hairline))
-                    .overlay(
-                        VStack(spacing: 3) {
-                            Image(systemName: "line.3.horizontal").font(.system(size: 8))
-                                .foregroundStyle(DesignTokens.Palette.tertiaryText)
-                            Image(systemName: registry.module(id: id)?.iconName ?? "square")
-                            Text(registry.module(id: id)?.displayName ?? id).font(.system(size: 8)).lineLimit(1)
-                        }.foregroundStyle(DesignTokens.Palette.secondaryText))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 64)
-                    .layoutPriority(Double(w.multiplier))
-                    .onDrag { dragging = id; return NSItemProvider(object: id as NSString) }
-                    .onDrop(of: [.text], isTargeted: nil) { providers in
-                        drop(onto: id, providers: providers)
-                    }
-            }
+        .onAppear {
+            settings.updateHomeLayout(definitions: definitions) { _ in }
         }
-        .padding(.horizontal, 16).padding(.vertical, 10)
-        .animation(.easeInOut(duration: 0.2), value: order)
-    }
-
-    /// Reorder the dragged module to the dropped card's slot, via the shared
-    /// reorder engine. Invalid/cancelled drops leave the order unchanged.
-    private func drop(onto target: String, providers: [NSItemProvider]) -> Bool {
-        guard let provider = providers.first else { dragging = nil; return false }
-        _ = provider.loadObject(ofClass: NSString.self) { obj, _ in
-            guard let src = obj as? String else { return }
-            DispatchQueue.main.async {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    settings.settings.editorialOrder = HomeReorder.move(order, drag: src, onto: target)
-                }
-                dragging = nil
-            }
-        }
-        return true
     }
 
     private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Customize Home").font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(DesignTokens.Palette.primaryText)
-                Text("Reorder, show or hide, and resize your Home modules.")
-                    .font(.system(size: 11)).foregroundStyle(DesignTokens.Palette.secondaryText)
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Customize Home")
+                    .font(.system(size: 15, weight: .semibold))
+                Text("Choose what appears, adjust sizes, or drag to reorder.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DesignTokens.Palette.secondaryText)
             }
             Spacer()
-            Button("Cancel") { cancel() }.keyboardShortcut(.cancelAction)
-            Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            Button("Done") {
+                settings.saveNow()
+                dismiss()
+            }
+            .keyboardShortcut(.defaultAction)
         }
         .padding(16)
     }
 
-    private var presetRow: some View {
-        HStack(spacing: 8) {
-            Text("Layout").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
-            Picker("", selection: Binding(
-                get: { settings.settings.homeLayoutPreset },
-                set: { settings.settings.homeLayoutPreset = $0 })) {
-                ForEach(HomeLayoutPreset.allCases) { Text($0.label).tag($0) }
-            }
-            .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 320)
-            Spacer()
-        }
-        .padding(.horizontal, 16).padding(.vertical, 10)
-    }
+    private func row(_ definition: HomeModuleDefinition) -> some View {
+        let order = orderedDefinitions.map(\.id)
+        let position = (order.firstIndex(of: definition.id) ?? 0) + 1
+        let visible = HomeLayoutNormalizer.isVisible(
+            definition.id, in: settings.settings, definitions: definitions)
+        let selectedSize = HomeLayoutNormalizer.size(
+            definition.id, in: settings.settings, definitions: definitions)
+            ?? definition.defaultSize
 
-    private func moduleRow(_ id: String) -> some View {
-        let module = registry.module(id: id)
-        let hidden = settings.settings.editorialHidden.contains(id)
-        let width = settings.settings.editorialWidths[id] ?? .standard
-        let pos = (order.firstIndex(of: id) ?? 0) + 1
-        return HStack(spacing: 12) {
+        return HStack(alignment: .center, spacing: 11) {
             Image(systemName: "line.3.horizontal")
-                .font(.system(size: 12)).foregroundStyle(DesignTokens.Palette.tertiaryText)
-                .accessibilityLabel("Drag handle")
-            Image(systemName: module?.iconName ?? "square.dashed")
-                .font(.system(size: 16)).frame(width: 26)
-                .foregroundStyle(hidden ? .tertiary : .primary)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(module?.displayName ?? id).font(.system(size: 12.5, weight: .medium))
-                Text(descriptionFor(id)).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer()
-            Picker("", selection: Binding(
-                get: { width },
-                set: { settings.settings.editorialWidths[id] = $0 })) {
-                ForEach(EditorialZoneWidth.allCases) { Text($0.sizeLabel).tag($0) }
-            }
-            .labelsHidden().frame(width: 110).disabled(hidden)
-            Toggle("", isOn: Binding(
-                get: { !hidden },
-                set: { show in setVisible(id, show) }))
-            .labelsHidden().toggleStyle(.switch)
-        }
-        .padding(.vertical, 4)
-        .opacity(hidden ? 0.55 : 1)
-        .contextMenu {
-            Button("Move Earlier") { shift(id, by: -1) }
-            Button("Move Later") { shift(id, by: 1) }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(module?.displayName ?? id), position \(pos) of \(order.count)")
-        .accessibilityActions {
-            Button("Move Earlier") { shift(id, by: -1) }
-            Button("Move Later") { shift(id, by: 1) }
-        }
-    }
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(DesignTokens.Palette.tertiaryText)
+                .frame(width: 18, height: 28)
+                .contentShape(Rectangle())
+                .draggable(definition.id)
+                .accessibilityLabel("Drag \(definition.name)")
 
-    /// Keyboard / context reorder — same source of truth as drag.
-    private func shift(_ id: String, by delta: Int) {
-        withAnimation(.easeInOut(duration: 0.18)) {
-            settings.settings.editorialOrder = HomeReorder.shift(order, id: id, by: delta)
+            Image(systemName: definition.icon)
+                .font(.system(size: 16))
+                .frame(width: 24)
+                .foregroundStyle(visible ? .primary : .tertiary)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(definition.name)
+                    .font(.system(size: 12.5, weight: .medium))
+                if definition.supportedSizes.count > 1 {
+                    Picker("Size", selection: Binding(
+                        get: { selectedSize },
+                        set: { size in
+                            persist {
+                                HomeLayoutNormalizer.setSize(
+                                    size, id: definition.id,
+                                    in: &$0, definitions: definitions)
+                            }
+                        })) {
+                            ForEach(definition.supportedSizes) { size in
+                                Text(size.sizeLabel).tag(size)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .controlSize(.small)
+                        .frame(maxWidth: 235)
+                        .accessibilityLabel("\(definition.name) size")
+                        .accessibilityValue(selectedSize.sizeLabel)
+                } else if let only = definition.supportedSizes.first {
+                    Text("Size: \(only.sizeLabel)")
+                        .font(.system(size: 10))
+                        .foregroundStyle(DesignTokens.Palette.secondaryText)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            Toggle("Visible", isOn: Binding(
+                get: { visible },
+                set: { show in
+                    persist {
+                        HomeLayoutNormalizer.setVisible(
+                            show, id: definition.id,
+                            in: &$0, definitions: definitions)
+                    }
+                }))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .accessibilityLabel("\(definition.name) visible")
+                .accessibilityValue(visible ? "Visible" : "Hidden")
+        }
+        .padding(.vertical, 7)
+        .opacity(visible ? 1 : 0.62)
+        .contentShape(Rectangle())
+        .focusable()
+        .focused($focusedID, equals: definition.id)
+        .onMoveCommand { direction in
+            switch direction {
+            case .up: shift(definition.id, by: -1)
+            case .down: shift(definition.id, by: 1)
+            default: break
+            }
+        }
+        .contextMenu {
+            Button("Move Up") { shift(definition.id, by: -1) }
+                .disabled(position == 1)
+            Button("Move Down") { shift(definition.id, by: 1) }
+                .disabled(position == order.count)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            "\(definition.name), \(visible ? "visible" : "hidden"), size \(selectedSize.sizeLabel), position \(position) of \(order.count)")
+        .accessibilityActions {
+            Button("Move Up") { shift(definition.id, by: -1) }
+            Button("Move Down") { shift(definition.id, by: 1) }
         }
     }
 
     private var footer: some View {
         HStack {
-            Button("Reset to Default", role: .destructive) { reset() }
-                .buttonStyle(.plain).foregroundStyle(.red).font(.system(size: 11))
+            Button("Reset to Default", role: .destructive) {
+                persist { HomeLayoutNormalizer.reset(&$0, definitions: definitions) }
+            }
             Spacer()
         }
         .padding(16)
     }
 
-    private func move(from source: IndexSet, to dest: Int) {
-        var ids = order
-        ids.move(fromOffsets: source, toOffset: dest)
-        settings.settings.editorialOrder = ids
-    }
-
-    /// Toggle visibility, but never allow the last visible module to be hidden.
-    private func setVisible(_ id: String, _ show: Bool) {
-        if show {
-            settings.settings.editorialHidden.removeAll { $0 == id }
-            hideWarning = false
-        } else {
-            let remaining = order.filter { !settings.settings.editorialHidden.contains($0) && $0 != id }
-            guard !remaining.isEmpty else { hideWarning = true; return }
-            if !settings.settings.editorialHidden.contains(id) {
-                settings.settings.editorialHidden.append(id)
-            }
+    private func shift(_ id: String, by delta: Int) {
+        persist {
+            HomeLayoutNormalizer.move(
+                id, by: delta, in: &$0, definitions: definitions)
         }
     }
 
-    private func reset() {
-        settings.settings.editorialOrder = nil
-        settings.settings.editorialHidden = []
-        settings.settings.editorialWidths = [:]
-        settings.settings.homeLayoutPreset = .balanced
-    }
-
-    // MARK: Cancel / Done draft
-
-    private func currentDraft() -> HomeCustomizationDraft {
-        HomeCustomizationDraft(
-            preset: settings.settings.homeLayoutPreset,
-            order: settings.settings.editorialOrder,
-            hidden: settings.settings.editorialHidden,
-            widths: settings.settings.editorialWidths)
-    }
-
-    /// Restore the exact configuration captured when the sheet opened.
-    private func cancel() {
-        if let s = snapshot {
-            settings.settings.homeLayoutPreset = s.preset
-            settings.settings.editorialOrder = s.order
-            settings.settings.editorialHidden = s.hidden
-            settings.settings.editorialWidths = s.widths
-        }
-        dismiss()
-    }
-
-    private func descriptionFor(_ id: String) -> String {
-        switch id {
-        case "quickNote": return "A quick sticky note"
-        case "nowPlaying": return "Now playing controls"
-        case "fileShelf": return "Temporary file staging"
-        case "mirror": return "Live camera mirror"
-        default: return "Home module"
+    private func persist(_ update: (inout AppSettings) -> Void) {
+        withAnimation(.easeInOut(duration: 0.16)) {
+            settings.updateHomeLayout(definitions: definitions, update)
         }
     }
 }

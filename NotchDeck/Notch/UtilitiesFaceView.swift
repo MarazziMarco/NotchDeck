@@ -204,65 +204,29 @@ struct AdaptiveTabBar: View {
     }
 }
 
-/// Home tab — favorites resolved for the current layout (max modules, min-size
-/// aware). Overflow modules are moved off Home, never shrunk to tiny.
+/// Home uses the stable built-in editorial layout and its dedicated editor.
 struct HomeTabView: View {
-    @EnvironmentObject private var registry: ModuleRegistry
-    @EnvironmentObject private var appState: AppState
-    @EnvironmentObject private var responsive: NotchResponsiveLayoutService
-    @EnvironmentObject private var dashboard: DashboardModel
-
-    @State private var page = 0
-
-    private var layoutClass: NotchLayoutClass { responsive.current.layoutClass }
-    private var columns: Int { DashboardGrid.columns(for: layoutClass) }
-    private var result: GridSolver.Result { dashboard.resolved(for: layoutClass) }
-
-    @EnvironmentObject private var settings: SettingsStore
-
-    private var style: HomeCompositionStyle {
-        settings.settings.homeCompositionByClass[layoutClass.rawValue] ?? .editorial
-    }
+    @State private var showingHomeCustomization = false
 
     var body: some View {
         VStack(spacing: 4) {
             header
-            switch style {
-            case .editorial: HomeEditorialView()
-            case .minimal: HomeEditorialView(minimal: true)
-            case .grid:
-                if result.cells.isEmpty { empty } else { grid }
-                if result.pageCount > 1 { pager }
-            }
+            HomeEditorialView(onCustomize: { showingHomeCustomization = true })
         }
-        .onChange(of: dashboard.customizing) { _, c in appState.isCustomizingDashboard = c }
-        .onDisappear { appState.isCustomizingDashboard = false }
+        .sheet(isPresented: $showingHomeCustomization) {
+            HomeCustomizationView()
+        }
         // The visual "Home" title is removed (the tab bar already identifies the
         // page); the semantic page title is preserved for VoiceOver.
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text(UtilitiesTab.home.title))
     }
 
-    /// Customize affordances only — the redundant "Home" title has been removed.
-    /// The row still exists solely to host Customize / Add / Done while editing.
+    /// One consistent entry point for the dedicated Home editor.
     private var header: some View {
         HStack(spacing: 8) {
-            if dashboard.customizing {
-                Text(layoutClass.rawValue.capitalized)
-                    .font(.system(size: 9)).foregroundStyle(DesignTokens.Palette.tertiaryText)
-            }
             Spacer()
-            if dashboard.customizing {
-                Menu(style.label) {
-                    ForEach(HomeCompositionStyle.allCases) { s in
-                        Button(s.label) { settings.settings.homeCompositionByClass[layoutClass.rawValue] = s }
-                    }
-                }.font(.system(size: 10.5)).menuStyle(.borderlessButton).fixedSize()
-                headerBtn("Add") { appState.showingModuleLibrary = true }
-                headerBtn("Done") { dashboard.customizing = false }
-            } else {
-                headerBtn("Customize") { dashboard.customizing = true }
-            }
+            headerBtn("Customize") { showingHomeCustomization = true }
         }
         .padding(.horizontal, 12)
     }
@@ -273,171 +237,6 @@ struct HomeTabView: View {
             .padding(.horizontal, 8).padding(.vertical, 3)
             .background(DesignTokens.Palette.cardFillHover, in: Capsule())
             .foregroundStyle(DesignTokens.Palette.secondaryText)
-    }
-
-    private var grid: some View {
-        GeometryReader { geo in
-            let cellW = geo.size.width / CGFloat(columns)
-            let rowH: CGFloat = 46
-            let cells = result.cells.filter { $0.page == page }
-            ZStack(alignment: .topLeading) {
-                if dashboard.customizing { alignmentGrid(cols: columns, cellW: cellW, rowH: rowH, in: geo.size) }
-                ForEach(cells) { cell in
-                    if let module = dashboard.module(id: cell.id) {
-                        WidgetHost(module: module,
-                                   size: sizeFor(cell),
-                                   customizing: dashboard.customizing,
-                                   layoutClass: layoutClass,
-                                   onDrop: { order in dashboard.move(cell.id, toOrder: order, for: layoutClass) })
-                            .frame(width: cellW * CGFloat(cell.w) - 8, height: rowH * CGFloat(cell.h) - 8)
-                            .position(x: cellW * (CGFloat(cell.col) + CGFloat(cell.w) / 2),
-                                      y: rowH * (CGFloat(cell.row) + CGFloat(cell.h) / 2))
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        }
-        .padding(.horizontal, 8)
-    }
-
-    private func sizeFor(_ cell: GridCell) -> DashboardWidgetSize {
-        dashboard.placements(for: layoutClass).first { $0.moduleID == cell.id }?.size ?? .small
-    }
-
-    private func alignmentGrid(cols: Int, cellW: CGFloat, rowH: CGFloat, in size: CGSize) -> some View {
-        Path { p in
-            for c in 0...cols { let x = cellW * CGFloat(c); p.move(to: CGPoint(x: x, y: 0)); p.addLine(to: CGPoint(x: x, y: size.height)) }
-            for r in 0...Int(size.height / rowH) { let y = rowH * CGFloat(r); p.move(to: CGPoint(x: 0, y: y)); p.addLine(to: CGPoint(x: size.width, y: y)) }
-        }
-        .stroke(.white.opacity(0.06), lineWidth: 0.5)
-    }
-
-    private var pager: some View {
-        HStack(spacing: 5) {
-            ForEach(0..<result.pageCount, id: \.self) { i in
-                Circle().fill(i == page ? DesignTokens.Palette.primaryText : DesignTokens.Palette.tertiaryText)
-                    .frame(width: 5, height: 5)
-                    .onTapGesture { page = i }
-            }
-        }
-        .padding(.bottom, 4)
-    }
-
-    private var empty: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "square.grid.2x2").font(.system(size: 26))
-                .foregroundStyle(DesignTokens.Palette.tertiaryText)
-            Text("No widgets yet").font(.callout).foregroundStyle(DesignTokens.Palette.secondaryText)
-            Button("Add widgets") { appState.showingModuleLibrary = true }
-                .buttonStyle(.plain).font(.system(size: 11, weight: .medium))
-                .padding(.horizontal, 12).padding(.vertical, 5)
-                .background(DesignTokens.Palette.cardFillHover, in: Capsule())
-                .foregroundStyle(DesignTokens.Palette.primaryText)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-/// Hosts a widget: renders the module's distinct-identity widget, adds a
-/// silhouette background for tile/sheet styles (circular/custom draw their own),
-/// and — in Customize mode — a drag handle, resize menu and remove control.
-/// Normal-mode functional controls (Pomodoro/music) stay usable because dragging
-/// is only enabled via the handle in customize mode.
-struct WidgetHost: View {
-    let module: NotchModule
-    let size: DashboardWidgetSize
-    let customizing: Bool
-    let layoutClass: NotchLayoutClass
-    let onDrop: (Int) -> Void
-
-    @EnvironmentObject private var appState: AppState
-    @EnvironmentObject private var dashboard: DashboardModel
-    @State private var hovering = false
-
-    private var wantsBackground: Bool {
-        switch module.preferredStyle {
-        case .circular, .custom: return false
-        default: return true
-        }
-    }
-
-    var body: some View {
-        content
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background {
-                if wantsBackground {
-                    RoundedRectangle(cornerRadius: DesignTokens.Metrics.cardCornerRadius, style: .continuous)
-                        .fill(DesignTokens.Palette.cardFill)
-                        .overlay(RoundedRectangle(cornerRadius: DesignTokens.Metrics.cardCornerRadius, style: .continuous)
-                            .strokeBorder(DesignTokens.Palette.hairline, lineWidth: 0.6))
-                }
-            }
-            .overlay(alignment: .topTrailing) { if !customizing && hovering { expandButton } }
-            .overlay { if customizing { customizeChrome } }
-            .onHover { hovering = $0 }
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("\(module.displayName) widget, \(size.label), \(layoutClass.rawValue)")
-    }
-
-    private var content: some View {
-        module.makeWidget(size: size)
-            .allowsHitTesting(!customizing)   // disable functional controls while dragging
-    }
-
-    private var expandButton: some View {
-        Button { appState.focusModule(module.id) } label: {
-            Image(systemName: "arrow.up.left.and.arrow.down.right")
-                .font(.system(size: 9, weight: .semibold)).padding(5)
-                .background(.black.opacity(0.4), in: Circle())
-                .foregroundStyle(DesignTokens.Palette.primaryText)
-        }.buttonStyle(.plain).padding(4)
-    }
-
-    private var customizeChrome: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: DesignTokens.Metrics.cardCornerRadius, style: .continuous)
-                .strokeBorder(DesignTokens.Palette.statusRunning.opacity(0.6),
-                              style: StrokeStyle(lineWidth: 1, dash: [4]))
-            VStack {
-                HStack {
-                    // Drag handle (only this initiates the drag).
-                    Image(systemName: "line.3.horizontal")
-                        .font(.system(size: 11)).padding(4)
-                        .background(.black.opacity(0.5), in: Circle())
-                        .foregroundStyle(DesignTokens.Palette.primaryText)
-                        .onDrag { NSItemProvider(object: module.id as NSString) }
-                    Spacer()
-                    Button { dashboard.remove(module.id, for: layoutClass) } label: {
-                        Image(systemName: "minus.circle.fill").font(.system(size: 12))
-                            .foregroundStyle(DesignTokens.Palette.statusFailure)
-                    }.buttonStyle(.plain)
-                }
-                Spacer()
-                Menu {
-                    ForEach(module.supportedWidgetSizes) { s in
-                        Button(s.label) { dashboard.setSize(module.id, s, for: layoutClass) }
-                    }
-                } label: {
-                    Image(systemName: "square.resize").font(.system(size: 10)).padding(4)
-                        .background(.black.opacity(0.5), in: Circle())
-                        .foregroundStyle(DesignTokens.Palette.primaryText)
-                }.menuStyle(.borderlessButton).fixedSize()
-            }
-            .padding(4)
-        }
-        .onDrop(of: [.text], isTargeted: nil) { providers in
-            _ = providers.first?.loadObject(ofClass: NSString.self) { obj, _ in
-                if let draggedID = obj as? String, draggedID != module.id {
-                    DispatchQueue.main.async {
-                        let placements = dashboard.placements(for: layoutClass)
-                        if let targetOrder = placements.first(where: { $0.moduleID == module.id })?.order {
-                            dashboard.move(draggedID, toOrder: targetOrder, for: layoutClass)
-                        }
-                    }
-                }
-            }
-            return true
-        }
     }
 }
 
