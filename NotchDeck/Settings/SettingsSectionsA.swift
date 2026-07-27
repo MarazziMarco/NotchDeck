@@ -85,45 +85,9 @@ struct AppearanceSettingsView: View {
     }
 }
 
+/// The Modules destination in Settings. See `ModulesScreen`.
 struct ModulesSettingsView: View {
-    @EnvironmentObject private var registry: ModuleRegistry
-    @EnvironmentObject private var settings: SettingsStore
-
-    var body: some View {
-        SettingsGroup(title: "Modules") {
-            Text("Enable modules and choose Home favorites and sizes. The Home dashboard reflows automatically. The full library is also available from the “Modules” button in the notch.")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            List {
-                ForEach(registry.allModules, id: \.id) { module in
-                    HStack(spacing: 8) {
-                        Image(systemName: module.iconName).frame(width: 20)
-                        Text(module.displayName)
-                        if !module.isAvailable {
-                            Text("Unavailable").font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if registry.isEnabled(module) {
-                            Picker("", selection: Binding(
-                                get: { registry.size(for: module) },
-                                set: { registry.setSize(module, $0) })) {
-                                ForEach(module.supportedSizes) { Text($0.label).tag($0) }
-                            }.labelsHidden().frame(width: 90).controlSize(.small)
-                            Toggle("Home", isOn: Binding(
-                                get: { registry.isHomeFavorite(module) },
-                                set: { $0 ? registry.addToHome(module) : registry.removeFromHome(module) }))
-                                .controlSize(.mini)
-                        }
-                        Toggle("", isOn: Binding(
-                            get: { registry.isEnabled(module) },
-                            set: { registry.toggleEnabled(module, $0) }))
-                            .labelsHidden()
-                    }
-                }
-            }
-            .frame(height: 240)
-        }
-    }
+    var body: some View { ModulesScreen() }
 }
 
 struct ClipboardSettingsView: View {
