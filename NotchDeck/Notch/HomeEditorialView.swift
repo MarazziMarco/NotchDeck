@@ -7,6 +7,7 @@ import SwiftUI
 struct HomeEditorialView: View {
     var minimal = false
     @EnvironmentObject private var registry: ModuleRegistry
+    @EnvironmentObject private var community: CommunityModuleRegistry
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var responsive: NotchResponsiveLayoutService
     @EnvironmentObject private var dashboard: DashboardModel
@@ -20,10 +21,11 @@ struct HomeEditorialView: View {
     /// Enabled Home-group modules in the configured order, minus hidden.
     private var order: [String] {
         let base = settings.settings.editorialOrder ?? EditorialHomeLayout.defaultOrder
-        let enabledHome = Set(registry.modules(in: .home).map(\.id))
+        let enabledHome = Set(registry.modules(in: .home).map(\.id)).union(communityHomeIDs)
         var ids = base.filter { enabledHome.contains($0) && !settings.settings.editorialHidden.contains($0) }
         // Append any enabled home modules not in the default order.
         for id in registry.modules(in: .home).map(\.id) where !ids.contains(id) { ids.append(id) }
+        for id in communityHomeIDs where !ids.contains(id) { ids.append(id) }
         if minimal { ids = Array(ids.prefix(2)) }
         return ids
     }
@@ -146,7 +148,17 @@ struct HomeEditorialView: View {
         case "mirror": EditorialMirror()
         default:
             if let module = registry.module(id: id) { module.makeWidget(size: .medium) }
+            else if let community = community.module(identifier: id), let card = community.homeCard() { card }
         }
+    }
+
+    /// Enabled community modules that surface a Home card (source of truth:
+    /// `moduleEnabled`, defaulting to each descriptor's `defaultEnabled`).
+    private var communityHomeIDs: [String] {
+        community.descriptors
+            .filter { $0.surfaces.contains(.homeCard) }
+            .filter { ModuleEnablement.isEnabled($0.identifier, defaultEnabled: $0.defaultEnabled, settings: settings.settings) }
+            .map(\.identifier)
     }
 
     /// Faded vertical separators sitting in the gaps between zones.

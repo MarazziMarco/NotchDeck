@@ -16,8 +16,8 @@ enum ModuleRegistryError: Error, Equatable {
 /// This is SEPARATE from the existing `ModuleRegistry` that drives the shipped
 /// built-in widgets, so no existing feature is rewritten.
 @MainActor
-final class CommunityModuleRegistry {
-    private(set) var modules: [AnyNotchDeckModule] = []
+final class CommunityModuleRegistry: ObservableObject {
+    @Published private(set) var modules: [AnyNotchDeckModule] = []
     private var index: [String: Int] = [:]           // identifier → position
     private var aliases: [String: String] = [:]      // old identifier → current
     private var disabled: Set<String> = []

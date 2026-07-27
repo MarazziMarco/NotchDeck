@@ -31,6 +31,8 @@ final class AppEnvironment: ObservableObject {
     let downloads: DownloadsService
     let screenshot: ScreenshotService
     let liveActivity: LiveActivityCoordinator
+    /// Community-extensible module registry (System Pulse, …).
+    let community: CommunityModuleRegistry
     /// Set by AppDelegate; used by secondary windows to prepare the notch.
     weak var interaction: NotchInteractionCoordinator?
 
@@ -66,6 +68,9 @@ final class AppEnvironment: ObservableObject {
         self.downloads = DownloadsService()
         self.screenshot = ScreenshotService()
         self.liveActivity = LiveActivityCoordinator()
+        let community = CommunityModuleRegistry()
+        _ = try? community.register(SystemPulseModule.self)
+        self.community = community
 
         let modules: [NotchModule] = [
             ClipboardModule(),
@@ -129,6 +134,7 @@ final class AppEnvironment: ObservableObject {
             .environmentObject(agents)
             .environmentObject(permissions)
             .environmentObject(registry)
+            .environmentObject(community)
             .environmentObject(diagnostics)
             .environmentObject(terminalStats)
             .environmentObject(notchLayout)

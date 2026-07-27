@@ -81,9 +81,13 @@ struct AppSettings: Codable, Equatable {
     var reduceMotionOverride: Bool = false
 
     // Modules
-    var moduleEnabled: [String: Bool] = [:]       // installed / available in library
+    var moduleEnabled: [String: Bool] = [:]       // authoritative enabled state (built-in + community)
     var moduleOrder: [String] = []                // library order
     var compactIndicatorModuleIDs: [String] = ["clipboard"]
+    /// Show Example/developer modules in the Modules screen.
+    var showDeveloperModules: Bool = false
+    /// System Pulse (community module) configuration.
+    var systemPulse: SystemPulseSettings = .default
 
     // Home dashboard (nil = use per-module defaults on first run)
     var homeFavorites: [String]? = nil            // module ids shown on Home, in order
