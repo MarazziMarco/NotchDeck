@@ -4,6 +4,27 @@ import XCTest
 /// Focus Terminal + presence: canonical TTY, exact matching, full enumeration,
 /// safe actuation, and truthful error states — all via fakes (no real Terminal).
 final class TerminalTabMatchingTests: XCTestCase {
+    private final class FakeHost: TerminalHostControlling {
+        var inventories: [TerminalInventoryOutcome]
+        var focusOutcome: TerminalActuationOutcome = .focused
+        var inventoryCalls = 0
+        var focusedTTYs: [String] = []
+
+        init(_ inventories: [TerminalInventoryOutcome]) {
+            self.inventories = inventories
+        }
+
+        func inventory() -> TerminalInventoryOutcome {
+            let index = min(inventoryCalls, max(0, inventories.count - 1))
+            inventoryCalls += 1
+            return inventories[index]
+        }
+
+        func focusExistingTab(tty: String) -> TerminalActuationOutcome {
+            focusedTTYs.append(tty)
+            return focusOutcome
+        }
+    }
 
     private func tab(_ w: Int, _ t: Int, _ tty: String, selected: Bool = false, min: Bool = false) -> TerminalTabDescriptor {
         TerminalTabDescriptor(windowIndex: w, tabIndex: t, tty: tty, selected: selected, minimized: min)
@@ -140,5 +161,62 @@ final class TerminalTabMatchingTests: XCTestCase {
     func testMissingTTYReportedTruthfully() {
         let ctl = TerminalController()
         XCTAssertEqual(ctl.lookup(session: session(tty: nil)), .missingSessionTTY)
+    }
+
+    func testEveryClickUsesFreshInventoryAndNeverPersistsIndexes() {
+        let host = FakeHost([
+            .success([tab(1, 1, "/dev/ttys003")]),
+            .success([tab(4, 7, "/dev/ttys003")]),
+        ])
+        let controller = TerminalController(host: host)
+        XCTAssertEqual(
+            controller.lookup(session: session(tty: "/dev/ttys003")),
+            .found(.init(tty: "/dev/ttys003"))
+        )
+        XCTAssertEqual(
+            controller.lookup(session: session(tty: "/dev/ttys003")),
+            .found(.init(tty: "/dev/ttys003"))
+        )
+        XCTAssertEqual(host.inventoryCalls, 2)
+        XCTAssertEqual(host.focusedTTYs, ["/dev/ttys003", "/dev/ttys003"])
+    }
+
+    func testClosedOrReorderedTabUsesSecondInventoryTruthfully() {
+        let host = FakeHost([
+            .success([tab(1, 1, "/dev/ttys003")]),
+            .success([tab(1, 1, "/dev/ttys009")]),
+        ])
+        let controller = TerminalController(host: host)
+        XCTAssertNotNil(controller.lookup(session: session(tty: "/dev/ttys003")))
+        XCTAssertEqual(controller.lookup(session: session(tty: "/dev/ttys003")), .ttyNotFound)
+        XCTAssertEqual(host.focusedTTYs.count, 1)
+    }
+
+    func testUnsupportedHostNeverQueriesOrFocusesTerminal() {
+        let host = FakeHost([.success([tab(1, 1, "/dev/ttys003")])])
+        let controller = TerminalController(host: host)
+        XCTAssertEqual(
+            controller.lookup(session: session(
+                tty: "/dev/ttys003", app: "iTerm2", bundle: "com.googlecode.iterm2"
+            )),
+            .unsupportedTerminal("iTerm2")
+        )
+        XCTAssertEqual(host.inventoryCalls, 0)
+        XCTAssertTrue(host.focusedTTYs.isEmpty)
+    }
+
+    func testMalformedInventoryDiffersFromSuccessfulEmptyInventory() {
+        XCTAssertEqual(TerminalTabInventory.parseDetailed("bad|row"), .malformed)
+        XCTAssertEqual(TerminalTabInventory.parseDetailed(""), .success([]))
+    }
+
+    func testInvalidTTYRejectedBeforeInventoryOrScript() {
+        let host = FakeHost([.success([])])
+        let controller = TerminalController(host: host)
+        XCTAssertEqual(
+            controller.lookup(session: session(tty: #"/dev/ttys003" & do script "bad""#)),
+            .missingSessionTTY
+        )
+        XCTAssertEqual(host.inventoryCalls, 0)
     }
 }

@@ -15,6 +15,20 @@ actor AgentProcessTable {
         processes[sessionID]
     }
 
+    /// Exact live PID for each session-owned Process object. The authoritative
+    /// scanner combines this ephemeral mapping with the kernel start timestamp
+    /// before persisting a process identity.
+    func liveProcessIDs() async -> [UUID: Int32] {
+        let entries = processes
+        var result: [UUID: Int32] = [:]
+        for (sessionID, process) in entries {
+            if let pid = await process.livePID {
+                result[sessionID] = pid
+            }
+        }
+        return result
+    }
+
     func writeLine(_ text: String, to sessionID: UUID) async {
         await processes[sessionID]?.writeLine(text)
     }

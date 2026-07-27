@@ -35,7 +35,7 @@ final class HookSchemaTests: XCTestCase {
     }
 }
 
-// MARK: Delivery lifecycle (Approved only after ack)
+// MARK: Delivery lifecycle (provider continuation only after progression)
 
 final class ApprovalDeliveryTests: XCTestCase {
     private func approval(_ state: PendingApproval.ResponseState) -> PendingApproval {
@@ -47,10 +47,11 @@ final class ApprovalDeliveryTests: XCTestCase {
                         nativePromptExpected: true)
     }
     func testDeliveryStatesExist() {
-        // Explicit lifecycle beyond pending → answered.
-        let all: [PendingApproval.ResponseState] = [.pending, .sending, .delivered,
-                                                    .deliveryFailed, .fellBack, .expired, .cancelled]
-        XCTAssertEqual(Set(all).count, 7)
+        let all: [PendingApproval.ResponseState] = [
+            .pending, .sending, .sent, .helperExited, .delivered,
+            .deliveryFailed, .fellBack, .expired, .cancelled,
+        ]
+        XCTAssertEqual(Set(all).count, 9)
     }
     func testDecodesSendingAndDelivered() throws {
         for st in [PendingApproval.ResponseState.sending, .delivered, .deliveryFailed] {
@@ -60,22 +61,16 @@ final class ApprovalDeliveryTests: XCTestCase {
         }
     }
 
-    @MainActor func testBridgeAckMarksDelivered() {
-        // Reduce ignores decisionDelivered for state; the bridge's ingest sets it.
-        // Here we simulate the store transition the ack performs.
+    @MainActor func testBridgeAckMarksSentNotDelivered() {
         let store = AgentSessionStore(fileName: "ack-\(UUID()).json")
         var s = AgentSession(provider: .claudeCode, title: "t", projectPath: "/p",
                              status: .waitingForApproval, isManaged: false)
         s.isBridgeConnected = true
         s.approval = approval(.sending)
         store.upsert(s)
-        // Ack path: sending → delivered.
-        store.update(id: s.id) {
-            if $0.approval?.state == .sending || $0.approval?.state == .pending {
-                $0.approval?.state = .delivered
-            }
-        }
-        XCTAssertEqual(store.session(id: s.id)?.approval?.state, .delivered)
+        store.update(id: s.id) { TerminalAgentBridge.applyResponseWritten(&$0) }
+        XCTAssertEqual(store.session(id: s.id)?.approval?.state, .sent)
+        XCTAssertEqual(store.session(id: s.id)?.latestSummary, "Sent to Claude Code")
     }
 }
 
@@ -83,20 +78,20 @@ final class ApprovalDeliveryTests: XCTestCase {
 
 final class HookInstallerSyncTests: XCTestCase {
     func testClaudeDecisionHookHasTimeoutAndNoAsync() {
-        // The synchronous decision hook is now PreToolUse.
+        // PermissionRequest is the only synchronous decision hook.
         let merged = HookInstaller.mergeHooks(base: [:], provider: .claudeCode, helper: "/tmp/h")
         let hooks = ((merged["hooks"] as? [String: Any]))
-        let pre = (hooks?["PreToolUse"] as? [[String: Any]])?.first
-        let inner = (pre?["hooks"] as? [[String: Any]])?.first
+        let request = (hooks?["PermissionRequest"] as? [[String: Any]])?.first
+        let inner = (request?["hooks"] as? [[String: Any]])?.first
         XCTAssertEqual(inner?["timeout"] as? Int, HookTimeouts.claudeHookTimeoutSeconds)  // 30s, > helper 15s > UI 8s
         XCTAssertNil(inner?["async"])                         // synchronous
     }
-    func testObserverPermissionRequestHasNoTimeoutBlock() {
+    func testPreToolUseEnrichmentHasNoTimeoutBlock() {
         let merged = HookInstaller.mergeHooks(base: [:], provider: .claudeCode, helper: "/tmp/h")
         let hooks = (merged["hooks"] as? [String: Any])
-        let pr = (hooks?["PermissionRequest"] as? [[String: Any]])?.first
-        let inner = (pr?["hooks"] as? [[String: Any]])?.first
-        XCTAssertNil(inner?["timeout"])                       // observer hook stays short-lived
+        let pre = (hooks?["PreToolUse"] as? [[String: Any]])?.first
+        let inner = (pre?["hooks"] as? [[String: Any]])?.first
+        XCTAssertNil(inner?["timeout"])                       // enrichment hook stays short-lived
     }
     func testExactlyOnePermissionRequestEntryAfterReinstall() {
         var base = HookInstaller.mergeHooks(base: [:], provider: .claudeCode, helper: "/tmp/h")

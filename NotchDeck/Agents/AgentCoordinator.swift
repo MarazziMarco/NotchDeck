@@ -14,8 +14,11 @@ final class AgentCoordinator: ObservableObject {
     /// original tab.
     @Published var lastFocusMessage: String?
 
-    private let terminalController = TerminalController()
+    private let terminalController: TerminalController
     private var terminalPresenceTask: Task<Void, Never>?
+    private let processDiscoverer: any AgentProcessDiscovering
+    private var processDiscoveryTask: Task<Void, Never>?
+    private var processScanGeneration: UInt64 = 0
 
     private var providers: [AgentProviderKind: AgentProvider]
     private let externalAdapter: ExternalSessionAdapter
@@ -28,10 +31,14 @@ final class AgentCoordinator: ObservableObject {
     init(store: AgentSessionStore,
          settings: SettingsStore,
          providers: [AgentProviderKind: AgentProvider]? = nil,
-         externalAdapter: ExternalSessionAdapter = ExternalSessionAdapter()) {
+         externalAdapter: ExternalSessionAdapter = ExternalSessionAdapter(),
+         processDiscoverer: any AgentProcessDiscovering = MacAgentProcessDiscovery(),
+         terminalController: TerminalController = TerminalController()) {
         self.store = store
         self.settings = settings
         self.externalAdapter = externalAdapter
+        self.processDiscoverer = processDiscoverer
+        self.terminalController = terminalController
         if let providers {
             self.providers = providers
         } else {
@@ -145,12 +152,8 @@ final class AgentCoordinator: ObservableObject {
     /// window or opens a replacement terminal.
     func focusTerminal(_ session: AgentSession) {
         let result = terminalController.lookup(session: session)
-        if case .found = result { lastFocusMessage = nil; return }
-
-        // For a non-Terminal (unsupported) window, try precise Accessibility raise.
-        if case .unsupportedTerminal = result,
-           session.externalBundleID != nil, externalAdapter.focus(session) {
-            lastFocusMessage = nil
+        if case .found = result {
+            lastFocusMessage = TerminalFocusFeedback.focused
             return
         }
 
@@ -198,10 +201,46 @@ final class AgentCoordinator: ObservableObject {
         terminalPresenceTask = nil
     }
 
+    // MARK: Authoritative local process discovery
+
+    func refreshDiscoveredProcesses() async {
+        processScanGeneration &+= 1
+        let generation = processScanGeneration
+        let discoverer = processDiscoverer
+        let timestamp = Date()
+        let snapshots = await Task.detached(priority: .utility) {
+            discoverer.discover(at: timestamp)
+        }.value
+        guard generation == processScanGeneration else { return }
+        let managedProcessIDs = await AgentProcessTable.shared.liveProcessIDs()
+        guard generation == processScanGeneration else { return }
+        store.replaceDiscoveredProcesses(
+            snapshots,
+            now: timestamp,
+            managedProcessIDs: managedProcessIDs
+        )
+    }
+
+    func startProcessDiscovery() {
+        processDiscoveryTask?.cancel()
+        processDiscoveryTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refreshDiscoveredProcesses()
+                try? await Task.sleep(nanoseconds: 3 * 1_000_000_000)
+            }
+        }
+    }
+
+    func stopProcessDiscovery() {
+        processDiscoveryTask?.cancel()
+        processDiscoveryTask = nil
+        processScanGeneration &+= 1
+    }
+
     /// Send an approval decision. Shows "Sending…", delivers the decision to the
-    /// live helper on its still-open connection, and only reports "Approved"
-    /// (delivered) once the helper acknowledges emitting the CLI JSON. A decision
-    /// after fallback/expiry is rejected. "Approved" never means merely clicked.
+    /// live helper on its still-open connection. Socket delivery, stdout write,
+    /// helper exit, and provider progression remain distinct truthful states.
+    /// A decision after fallback/expiry is rejected.
     func decide(session: AgentSession, allow: Bool) async {
         // Reject a late click: only a live pending approval may be decided.
         guard let current = store.session(id: session.id),

@@ -58,10 +58,7 @@ final class AgentSessionStore: ObservableObject, LiveActivitySource {
     // MARK: Active / Recent (terminal-presence driven)
 
     func bucket(_ s: AgentSession, now: Date = Date()) -> AgentBucket {
-        AgentSessionFilter.bucket(presence: s.terminalPresence, status: s.status,
-                                  isBridgeConnected: s.isBridgeConnected,
-                                  isManaged: s.isManaged,
-                                  hasExternalWindow: s.externalBundleID != nil)
+        AgentSessionFilter.bucket(s)
     }
 
     /// Sessions to show in Active, attention-first.
@@ -191,16 +188,45 @@ final class AgentSessionStore: ObservableObject, LiveActivitySource {
     /// scan. Managed sessions AND hook-connected bridge sessions are preserved —
     /// a Connected session must never be wiped by the Accessibility scan.
     func replaceExternal(_ external: [AgentSession]) {
-        sessions.removeAll { !$0.isManaged && !$0.isBridgeConnected }
-        // Don't re-add a scanned window that duplicates a connected session
-        // (same terminal app + title).
-        let connected = sessions.filter { $0.isBridgeConnected }
-        // Merge: drop a scanned window that duplicates a connected session by
-        // PID / TTY / project title — never show duplicates.
+        sessions.removeAll {
+            !$0.isManaged && !$0.isBridgeConnected && $0.processIdentity == nil
+        }
+        // Process-discovered and hook-connected sessions are authoritative.
+        // A compatibility Accessibility scan may observe the same Terminal
+        // window, but must not create a second card for it.
+        let authoritative = sessions.filter {
+            $0.processIdentity != nil || $0.isBridgeConnected
+        }
         let filtered = external.filter { ext in
-            !connected.contains { AgentSessionMerge.externalDuplicatesConnected(external: ext, connected: $0) }
+            !authoritative.contains {
+                AgentSessionMerge.externalDuplicatesConnected(external: ext, connected: $0)
+            }
         }
         sessions.append(contentsOf: filtered)
+    }
+
+    /// Reconcile the authoritative local process scan without disturbing
+    /// managed, hook-only, or window-only compatibility records.
+    func replaceDiscoveredProcesses(
+        _ snapshots: [AgentProcessSnapshot],
+        now: Date = Date(),
+        managedProcessIDs: [UUID: Int32] = [:]
+    ) {
+        sessions = AgentProcessReconciler.reconcile(
+            existing: sessions,
+            snapshots: snapshots,
+            now: now,
+            managedProcessIDs: managedProcessIDs
+        )
+        #if DEBUG
+        for snapshot in snapshots {
+            AgentApprovalDiagnostics.recordProcess(
+                snapshot: snapshot,
+                session: sessions.first { $0.processIdentity == snapshot.identity }
+            )
+        }
+        #endif
+        persistManaged()
     }
 
     private func persistManaged() {

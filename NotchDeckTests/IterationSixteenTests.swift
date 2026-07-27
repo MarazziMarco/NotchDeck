@@ -55,15 +55,15 @@ final class TerminalFocusFeedbackTests: XCTestCase {
     }
     func testPermissionDeniedMessage() {
         XCTAssertEqual(TerminalFocusFeedback.message(for: .automationPermissionDenied, presence: .unknown),
-                       "NotchDeck does not have permission to control Terminal")
+                       "Terminal Automation permission required")
     }
     func testMissingTTYMessage() {
         XCTAssertEqual(TerminalFocusFeedback.message(for: .missingSessionTTY, presence: .unknown),
-                       "This session has not yet been linked to its Terminal tab")
+                       "Terminal identifier unavailable")
     }
-    func testTerminalNotRunningIsUnavailable() {
+    func testTerminalNotRunningIsTruthful() {
         XCTAssertEqual(TerminalFocusFeedback.message(for: .terminalNotRunning, presence: .unknown),
-                       TerminalFocus.unavailableMessage)
+                       "Terminal.app is not running")
     }
     func testTtyNotFoundTransientWhenNotConfirmed() {
         // Tab not matched this pass but not yet confirmed-missing → transient, not "gone".
@@ -74,7 +74,7 @@ final class TerminalFocusFeedbackTests: XCTestCase {
     }
     func testTtyNotFoundUnavailableOnlyWhenMissing() {
         XCTAssertEqual(TerminalFocusFeedback.message(for: .ttyNotFound, presence: .missing),
-                       TerminalFocus.unavailableMessage)
+                       "Original terminal tab is no longer open")
     }
     func testUnavailableMessageNeverShownForUnknownReasons() {
         for r: TerminalSessionLookupResult in [.automationPermissionDenied, .missingSessionTTY,

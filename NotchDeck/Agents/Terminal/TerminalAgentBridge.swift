@@ -14,6 +14,12 @@ final class BridgeIO: @unchecked Sendable {
     func setRunning(_ v: Bool) { lock.lock(); _running = v; lock.unlock() }
 }
 
+private struct PendingApprovalConnection {
+    let clientFD: Int32
+    let providerRequestID: String
+    let appSessionID: UUID
+}
+
 /// Local, user-only bridge that receives real-time events from hook-connected
 /// terminal agent sessions over a Unix-domain socket and reflects them into the
 /// `AgentSessionStore`. Also answers permission requests with an Allow/Deny
@@ -32,10 +38,11 @@ actor TerminalAgentBridge {
     private nonisolated let io = BridgeIO()
     private var sweepTask: Task<Void, Never>?
 
-    /// providerSessionID → our session UUID.
+    /// provider + providerSessionID → our session UUID.
     private var sessionIDs: [String: UUID] = [:]
-    /// requestID → client fd awaiting a decision.
-    private var pendingApprovals: [String: Int32] = [:]
+    /// Per-helper transaction UUID → exact live socket and correlated identities.
+    /// Provider-native request IDs are not globally unique and never key this map.
+    private var pendingApprovals: [String: PendingApprovalConnection] = [:]
     /// session UUID → last event time (for offline sweep).
     private var lastSeen: [UUID: Date] = [:]
 
@@ -51,16 +58,24 @@ actor TerminalAgentBridge {
     /// released IMMEDIATELY to the provider's native terminal prompt. Nothing is
     /// swallowed, auto-approved or indefinitely delayed.
     private var uiAvailable: Bool = true
-    func setUIAvailable(_ available: Bool) { uiAvailable = available }
+    func setUIAvailable(_ available: Bool) async {
+        uiAvailable = available
+        if !available {
+            await releaseAllPendingToTerminal(reason: "fallback:ui-disabled")
+        }
+    }
 
     init(store: AgentSessionStore, stats: TerminalBridgeStats) {
         self.store = store
         self.stats = stats
     }
 
-    func configure(mode: AgentPermissionHandlingMode, fallbackDelay: TimeInterval) {
+    func configure(mode: AgentPermissionHandlingMode, fallbackDelay: TimeInterval) async {
         self.handlingMode = mode
-        self.fallbackDelay = fallbackDelay
+        self.fallbackDelay = min(fallbackDelay, HookTimeouts.maximumUIFallbackSeconds)
+        if mode == .terminalOnly {
+            await releaseAllPendingToTerminal(reason: "fallback:terminal-only")
+        }
     }
 
     var isListening: Bool { io.running }
@@ -111,7 +126,8 @@ actor TerminalAgentBridge {
         sweepTask = Task { [weak self] in await self?.sweepLoop() }
     }
 
-    func stop() {
+    func stop() async {
+        await releaseAllPendingToTerminal(reason: "fallback:bridge-stopping")
         io.setRunning(false)
         Task { @MainActor [stats] in stats.markListening(false) }
         sweepTask?.cancel()
@@ -128,6 +144,9 @@ actor TerminalAgentBridge {
                 if !io.running { break }
                 continue
             }
+            var noSignal: Int32 = 1
+            setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSignal,
+                       socklen_t(MemoryLayout<Int32>.size))
             Task { @MainActor [stats] in stats.recordConnection() }
             let readThread = Thread { [weak self] in self?.readLoop(client: client, io: io) }
             readThread.name = "notchdeck.bridge.read"
@@ -146,7 +165,17 @@ actor TerminalAgentBridge {
                 let lineData = pending.subdata(in: pending.startIndex..<nl)
                 pending.removeSubrange(pending.startIndex...nl)
                 if let line = String(data: lineData, encoding: .utf8) {
-                    Task { [weak self] in await self?.handleLine(line, client: client) }
+                    // Preserve JSONL ordering per helper connection. In
+                    // particular, `responseWritten` must be reduced before
+                    // `helperExited`; independent Tasks can otherwise enqueue
+                    // onto the actor out of order. This blocks only the
+                    // dedicated client thread, never the actor or main thread.
+                    let handled = DispatchSemaphore(value: 0)
+                    Task { [weak self] in
+                        await self?.handleLine(line, client: client)
+                        handled.signal()
+                    }
+                    handled.wait()
                 }
             }
         }
@@ -157,6 +186,7 @@ actor TerminalAgentBridge {
 
     private func handleLine(_ line: String, client: Int32) async {
         guard let event = TerminalAgentCodec.decodeEvent(line) else {
+            AgentApprovalDiagnostics.recordHookDecodeFailure()
             await MainActor.run { [stats] in stats.recordRejected("non-JSON / undecodable line") }
             return
         }
@@ -169,36 +199,101 @@ actor TerminalAgentBridge {
     }
 
     private func dropApprovals(forClient client: Int32) {
-        for (rid, f) in pendingApprovals where f == client { pendingApprovals[rid] = nil }
+        let disconnected = pendingApprovals.compactMap {
+            $0.value.clientFD == client ? ($0.key, $0.value) : nil
+        }
+        for (transactionID, connection) in disconnected {
+            pendingApprovals[transactionID] = nil
+            Task { @MainActor [store] in
+                store.update(id: connection.appSessionID) {
+                    Self.releaseTransaction(
+                        &$0,
+                        requestID: transactionID,
+                        state: .fellBack
+                    )
+                }
+            }
+        }
         close(client)
     }
 
     private func ingest(_ event: TerminalAgentEvent, client: Int32) async {
-        let uuid = sessionIDs[event.sessionID] ?? {
-            let id = UUID(); sessionIDs[event.sessionID] = id; return id
-        }()
+        let providerKind: AgentProviderKind
+        switch event.provider {
+        case .claudeCode: providerKind = .claudeCode
+        case .codex: providerKind = .codex
+        case .unknown:
+            await MainActor.run { [stats] in
+                stats.recordRejected("unsupported permission provider")
+            }
+            return
+        }
+        let currentSessions = await MainActor.run { [store] in store.sessions }
+        let ancestry = event.pid.map { MacProcessAncestry.identities(from: $0) } ?? []
+        let correlation = AgentHookProcessCorrelator.match(
+            provider: providerKind,
+            ancestorIdentities: ancestry,
+            cwd: event.cwd,
+            discoveredAt: Date(timeIntervalSince1970: event.timestamp),
+            sessions: currentSessions
+        )
+        AgentApprovalDiagnostics.recordHook(
+            event: event,
+            decoded: true,
+            correlation: correlation?.confidence
+        )
+        let sessionKey = "\(event.provider.rawValue):\(event.sessionID)"
+        let uuid = correlation?.sessionID ?? sessionIDs[sessionKey] ?? UUID()
+        sessionIDs[sessionKey] = uuid
         lastSeen[uuid] = Date()
 
-        // The PreToolUse decision hook is the ONLY blocking channel; register its
-        // live connection so the app can answer THIS exact helper.
-        if event.type == .toolPermissionRequested, let rid = event.requestID {
-            pendingApprovals[rid] = client
+        // PermissionRequest is the provider-specific synchronous decision
+        // channel. The exact helper connection owns the request.
+        if event.type == .permissionRequested {
+            guard let providerRequestID = event.requestID,
+                  let transactionID = event.transactionID,
+                  !providerRequestID.isEmpty,
+                  !transactionID.isEmpty else {
+                await MainActor.run { [stats] in
+                    stats.recordRejected("PermissionRequest missing transaction identity")
+                }
+                return
+            }
+            if let existing = pendingApprovals[transactionID] {
+                guard existing.clientFD == client else {
+                    await MainActor.run { [stats] in
+                        stats.recordRejected("duplicate transaction identity")
+                    }
+                    return
+                }
+            }
+            pendingApprovals[transactionID] = PendingApprovalConnection(
+                clientFD: client,
+                providerRequestID: providerRequestID,
+                appSessionID: uuid
+            )
             // Agents UI disabled: do not wait for an approval UI that will never
             // appear. Release the helper at once so the provider resumes its native
             // permission flow (safe fallback, never auto-approve).
-            if !uiAvailable {
-                await MainActor.run { [stats] in stats.recordDecoded(type: "fallback:ui-disabled", connectedTitle: "") }
-                releaseForFallback(requestID: rid)
+            if !uiAvailable || handlingMode == .terminalOnly {
+                let reason = uiAvailable ? "fallback:terminal-only" : "fallback:ui-disabled"
+                await MainActor.run { [stats] in stats.recordDecoded(type: reason, connectedTitle: "") }
+                releaseForFallback(requestID: transactionID)
                 return
             }
         }
 
-        // PermissionRequest is the OBSERVER channel — NotchDeck never answers it
-        // (the CLI ignores its decision). If a helper is blocking on it (older
-        // builds), release it immediately to the native flow so it can never hang.
-        if event.type == .permissionRequested, let rid = event.requestID {
-            pendingApprovals[rid] = client
-            releaseForFallback(requestID: rid)
+        // A stale v3 PreToolUse helper may still block. Never surface or answer it
+        // with the PermissionRequest encoder: release it to the native flow.
+        if event.type == .toolPermissionRequested,
+           let providerRequestID = event.requestID {
+            let transactionID = event.transactionID ?? UUID().uuidString
+            pendingApprovals[transactionID] = PendingApprovalConnection(
+                clientFD: client,
+                providerRequestID: providerRequestID,
+                appSessionID: uuid
+            )
+            releaseForFallback(requestID: transactionID)
             return
         }
 
@@ -207,9 +302,26 @@ actor TerminalAgentBridge {
         // "Approved". Real acceptance is inferred later from provider progression.
         if event.type == .responseWritten || event.type == .decisionDelivered {
             await MainActor.run { [store] in
-                store.update(id: uuid) { Self.applyResponseWritten(&$0) }
+                store.update(id: uuid) {
+                    Self.applyResponseWritten(&$0, requestID: event.transactionID)
+                }
             }
             return
+        }
+        if event.type == .helperExited {
+            await MainActor.run { [store] in
+                store.update(id: uuid) {
+                    Self.applyHelperExited(&$0, requestID: event.transactionID)
+                }
+            }
+            return
+        }
+
+        if event.type == .agentStopped || event.type == .sessionEnded {
+            await releasePendingToTerminal(
+                for: uuid,
+                reason: "fallback:provider-session-ended"
+            )
         }
 
         let mode = handlingMode
@@ -246,6 +358,7 @@ actor TerminalAgentBridge {
             status: .running,
             isManaged: false)
         s.isBridgeConnected = true
+        s.providerSessionID = event.sessionID
         s.lastActivityAt = Date(timeIntervalSince1970: event.timestamp)
         // Canonicalise on store ("ttys003" → "/dev/ttys003"); a later event with no
         // TTY must NEVER overwrite a valid stored one with nil.
@@ -253,8 +366,8 @@ actor TerminalAgentBridge {
             s.terminalTTY = TerminalFocus.normalizeTTY(t)
         }
         s.terminalAppName = event.terminalApp ?? s.terminalAppName
-        s.pid = event.pid ?? s.pid
-        s.ppid = event.ppid ?? s.ppid
+        // event.pid/ppid identify the hook helper. They are diagnostic ancestry
+        // inputs only and must never replace the agent process identity.
         s.shellPID = event.shellPID ?? s.shellPID
         s.termSessionID = event.termSessionID ?? s.termSessionID
         // Resolve the terminal bundle id (explicit, or inferred from Apple Terminal).
@@ -269,17 +382,31 @@ actor TerminalAgentBridge {
         // decision we sent proves the CLI ACCEPTED it and continued — the only
         // truthful basis for "Claude continued". Record it before the approval is
         // cleared below. Correlated by tool-use id (never by timestamp/name).
-        if event.type == .toolCompleted, let ap = s.approval,
-           ap.state == .sent || ap.state == .sending,
-           ap.requestID == (event.toolUseID ?? ap.requestID) {
-            s.latestSummary = (ap.decidedAllow ?? true) ? "Claude continued" : "Tool denied"
+        let matchingProgress = event.type == .toolCompleted
+            && s.approval.map { Self.providerProgressMatches($0, event: event) } == true
+        // After an explicit native fallback, a session-correlated PostToolUse
+        // may lack the PermissionRequest's tool identity (notably in Claude).
+        // It may clear one unambiguous fallback card, but never claims that a
+        // NotchDeck decision was accepted and never touches a queued request.
+        let resolvesUnambiguousFallback = event.type == .toolCompleted
+            && s.approval?.state == .fellBack
+            && s.queuedApprovalCount == 0
+        if matchingProgress, let ap = s.approval,
+           ap.state == .sent || ap.state == .sending || ap.state == .helperExited,
+           Self.providerProgressMatches(ap, event: event) {
+            let name = s.provider.displayName
+            s.latestSummary = (ap.decidedAllow ?? true) ? "\(name) continued" : "Tool denied"
         }
 
-        // A resolving event clears any live approval (tool executed / turn ended).
-        if ApprovalClassifier.clearsApproval(event.type) {
+        // Stop/SessionEnd are session-wide. PostToolUse only resolves the exact
+        // provider-native transaction; unrelated concurrent requests survive.
+        if event.type == .agentStopped || event.type == .sessionEnded {
             s.approval = nil
+            s.queuedApprovals = nil
             s.pendingApprovalRequestID = nil
             s.requiresAttention = false
+        } else if matchingProgress || resolvesUnambiguousFallback {
+            Self.finishCurrentTransaction(&s)
         }
 
         switch event.type {
@@ -293,12 +420,31 @@ actor TerminalAgentBridge {
             let summary = AgentLatestMessage.sanitize(event.summary ?? event.toolName.map { "Using \($0)" } ?? "")
             if !summary.isEmpty { s.latestSummary = summary }
         case .toolPermissionRequested:
-            // AUTHORITATIVE decision channel (PreToolUse). Creates the approval.
-            // Idempotent: a duplicate for the same live tool-use must not create a
-            // second approval.
-            if let existingApproval = s.approval, existingApproval.isLive,
-               existingApproval.requestID == (event.requestID ?? "") {
+            // Legacy v3 event. It is released by ingest and never creates an
+            // approval with a mismatched provider response schema.
+            s.status = .running
+        case .permissionRequested:
+            if handlingMode == .terminalOnly {
+                s.status = .running
+                s.requiresAttention = false
+                s.pendingApprovalRequestID = nil
+                s.latestSummary = "Respond in Terminal"
                 return s
+            }
+            // Idempotent: a duplicate for the same provider request identity must
+            // not create a second approval.
+            let requestID = event.transactionID ?? event.requestID ?? ""
+            if s.approval?.requestID == requestID
+                || (s.queuedApprovals ?? []).contains(where: { $0.requestID == requestID }) {
+                return s
+            }
+            // A later PermissionRequest proves the provider is no longer blocked
+            // on a prior non-live transaction. Retire that terminal presentation
+            // before inserting the new request; otherwise it can sit forever
+            // behind `.helperExited`, which the timeout sweep intentionally
+            // ignores because it no longer owns a live decision.
+            if let current = s.approval, !current.isLive {
+                Self.finishCurrentTransaction(&s)
             }
             let summary = AgentLatestMessage.sanitize(event.summary
                 ?? event.toolName.map { "\($0) — permission requested" } ?? "Permission requested")
@@ -306,28 +452,35 @@ actor TerminalAgentBridge {
                 ? now.addingTimeInterval(fallbackDelay) : nil
             s.status = .waitingForApproval
             s.requiresAttention = handlingMode.showsFunctionalDecision
-            s.pendingApprovalRequestID = event.requestID
             s.latestSummary = summary
-            s.approval = PendingApproval(
+            let transaction = PendingApproval(
                 provider: s.provider,
                 sessionID: event.sessionID,
-                requestID: event.requestID ?? "",
+                requestID: requestID,
+                providerRequestID: event.requestID,
                 toolUseID: event.toolUseID,
                 turnID: event.turnID,
-                rawEventName: "PreToolUse",
+                rawEventName: "PermissionRequest",
                 toolName: event.toolName,
                 summary: summary,
                 receivedAt: now,
-                expiresAt: now.addingTimeInterval(120),
+                expiresAt: now.addingTimeInterval(
+                    handlingMode == .notchOnly
+                        ? HookTimeouts.notchOnlyDecisionSeconds
+                        : HookTimeouts.helperHardDeadlineSeconds
+                ),
                 state: .pending,
                 handlingMode: handlingMode,
                 fallbackDeadline: fallbackDeadline,
                 nativePromptExpected: handlingMode.nativePromptExpected)
-        case .permissionRequested:
-            // OBSERVER only. The CLI does not consume this hook's decision, so it
-            // NEVER creates a NotchDeck approval — that would duplicate the
-            // PreToolUse transaction. It is a native-fallback / compatibility signal.
-            break
+            if s.approval == nil {
+                s.approval = transaction
+                s.pendingApprovalRequestID = requestID
+            } else {
+                var queued = s.queuedApprovals ?? []
+                queued.append(transaction)
+                s.queuedApprovals = queued
+            }
         case .toolCompleted:
             s.status = .running               // approval already cleared above
         case .agentStopped:
@@ -338,7 +491,7 @@ actor TerminalAgentBridge {
             }
         case .sessionEnded:
             s.status = .completed; s.requiresAttention = false; s.isBridgeConnected = false
-        case .heartbeat, .responseWritten, .decisionDelivered:
+        case .heartbeat, .responseWritten, .helperExited, .decisionDelivered:
             break
         }
         return s
@@ -351,26 +504,82 @@ actor TerminalAgentBridge {
     /// briefly as a non-interactive "Sent…" state and is finalised to "Claude
     /// continued" only when provider progression (PostToolUse) is observed, or
     /// cleared by a resolving event. A late/duplicate ack is a no-op.
-    static func applyResponseWritten(_ s: inout AgentSession) {
+    static func applyResponseWritten(_ s: inout AgentSession, requestID: String? = nil) {
         guard let approval = s.approval,
+              requestID == nil || approval.requestID == requestID,
               approval.state == .sending || approval.state == .pending else { return }
         let allow = approval.decidedAllow ?? true
         s.approval?.state = .sent
         s.requiresAttention = false
-        s.latestSummary = allow ? "Sent to Claude" : "Denial sent to Claude"
+        let name = s.provider.displayName
+        s.latestSummary = allow ? "Sent to \(name)" : "Denial sent to \(name)"
         // Keep the approval object (non-interactive) so the card can show "Sent…";
         // a subsequent PostToolUse finalises it, or a resolving event clears it.
+    }
+
+    static func applyHelperExited(_ s: inout AgentSession, requestID: String? = nil) {
+        guard let approval = s.approval,
+              requestID == nil || approval.requestID == requestID,
+              approval.state == .sent || approval.state == .sending else { return }
+        s.approval?.state = .helperExited
+        if s.queuedApprovalCount > 0 {
+            Self.finishCurrentTransaction(&s)
+        }
+    }
+
+    /// A provider progression signal is usable only when it carries the same
+    /// provider-native tool or turn identity. Missing identifiers are not proof.
+    static func providerProgressMatches(_ approval: PendingApproval,
+                                        event: TerminalAgentEvent) -> Bool {
+        if let toolUseID = approval.toolUseID, let eventToolUseID = event.toolUseID {
+            return toolUseID == eventToolUseID
+        }
+        if let turnID = approval.turnID, let eventTurnID = event.turnID {
+            return turnID == eventTurnID
+        }
+        return false
+    }
+
+    private static func finishCurrentTransaction(_ s: inout AgentSession) {
+        var queued = s.queuedApprovals ?? []
+        s.approval = queued.isEmpty ? nil : queued.removeFirst()
+        s.queuedApprovals = queued.isEmpty ? nil : queued
+        s.pendingApprovalRequestID = s.approval?.requestID
+        s.requiresAttention = s.approval?.isLive == true
+        if s.approval != nil { s.status = .waitingForApproval }
+    }
+
+    private static func releaseTransaction(_ s: inout AgentSession, requestID: String,
+                                           state: PendingApproval.ResponseState) {
+        if s.approval?.requestID == requestID {
+            if s.queuedApprovalCount > 0 {
+                finishCurrentTransaction(&s)
+            } else {
+                s.approval?.state = state
+                s.pendingApprovalRequestID = nil
+                s.requiresAttention = false
+                s.latestSummary = "Respond in Terminal"
+                if s.status == .waitingForApproval { s.status = .running }
+            }
+            return
+        }
+        var queued = s.queuedApprovals ?? []
+        queued.removeAll { $0.requestID == requestID }
+        s.queuedApprovals = queued.isEmpty ? nil : queued
     }
 
     // MARK: Approvals
 
     @discardableResult
     func respond(requestID: String, allow: Bool, message: String?) -> Bool {
-        guard let fd = pendingApprovals[requestID] else { return false }
-        let decision = TerminalAgentDecision(requestID: requestID,
+        guard let connection = pendingApprovals[requestID] else { return false }
+        let decision = TerminalAgentDecision(requestID: connection.providerRequestID,
+                                             transactionID: requestID,
                                              behavior: allow ? .allow : .deny, message: message)
-        if let data = TerminalAgentCodec.encodeLine(decision) {
-            _ = data.withUnsafeBytes { write(fd, $0.baseAddress, data.count) }
+        guard let data = TerminalAgentCodec.encodeLine(decision),
+              writeAll(data, to: connection.clientFD) else {
+            pendingApprovals[requestID] = nil
+            return false
         }
         pendingApprovals[requestID] = nil
         return true
@@ -380,14 +589,83 @@ actor TerminalAgentBridge {
     /// stop waiting and return empty stdout (native prompt).
     @discardableResult
     func releaseForFallback(requestID: String) -> Bool {
-        guard let fd = pendingApprovals[requestID] else { return false }
-        let release = TerminalAgentDecision(requestID: requestID, behavior: .deny, fallback: true)
-        if let data = TerminalAgentCodec.encodeLine(release) {
-            _ = data.withUnsafeBytes { write(fd, $0.baseAddress, data.count) }
+        guard let connection = pendingApprovals[requestID] else { return false }
+        let release = TerminalAgentDecision(
+            requestID: connection.providerRequestID,
+            transactionID: requestID,
+            behavior: .deny,
+            fallback: true
+        )
+        guard let data = TerminalAgentCodec.encodeLine(release),
+              writeAll(data, to: connection.clientFD) else {
+            pendingApprovals[requestID] = nil
+            return false
         }
         pendingApprovals[requestID] = nil
         return true
     }
+
+    private func releaseAllPendingToTerminal(reason: String) async {
+        await releasePendingToTerminal(for: nil, reason: reason)
+    }
+
+    private func releasePendingToTerminal(for appSessionID: UUID?, reason: String) async {
+        let pending = pendingApprovals.filter {
+            appSessionID == nil || $0.value.appSessionID == appSessionID
+        }
+        guard !pending.isEmpty else { return }
+        await MainActor.run { [store, stats] in
+            stats.recordDecoded(type: reason, connectedTitle: "")
+            for (transactionID, connection) in pending {
+                store.update(id: connection.appSessionID) {
+                    Self.releaseTransaction(
+                        &$0,
+                        requestID: transactionID,
+                        state: .fellBack
+                    )
+                }
+            }
+        }
+        for transactionID in pending.keys {
+            _ = releaseForFallback(requestID: transactionID)
+        }
+    }
+
+    private func writeAll(_ data: Data, to fd: Int32) -> Bool {
+        var offset = 0
+        return data.withUnsafeBytes { bytes in
+            guard let base = bytes.baseAddress else { return false }
+            while offset < data.count {
+                let count = write(fd, base.advanced(by: offset), data.count - offset)
+                if count > 0 {
+                    offset += count
+                } else if count < 0, errno == EINTR {
+                    continue
+                } else {
+                    return false
+                }
+            }
+            return true
+        }
+    }
+
+    #if DEBUG
+    /// Test boundary for proving that identical provider-native IDs cannot
+    /// cross-route between helper sockets. Production registration happens only
+    /// in `ingest`.
+    func registerPendingForTesting(
+        transactionID: String,
+        providerRequestID: String,
+        appSessionID: UUID,
+        clientFD: Int32
+    ) {
+        pendingApprovals[transactionID] = PendingApprovalConnection(
+            clientFD: clientFD,
+            providerRequestID: providerRequestID,
+            appSessionID: appSessionID
+        )
+    }
+    #endif
 
     // MARK: Offline sweep
 
@@ -401,13 +679,13 @@ actor TerminalAgentBridge {
                 for session in store.sessions {
                     guard let approval = session.approval, approval.isLive else { continue }
                     if approval.isExpired(now: now) {
-                        // Fail safe — never auto-approve. Clear and resume running.
+                        // Fail safe — never auto-approve. Release the matching
+                        // helper and promote an independent queued request.
+                        let rid = approval.requestID
                         store.update(id: session.id) {
-                            $0.approval?.state = .expired; $0.approval = nil
-                            $0.pendingApprovalRequestID = nil
-                            $0.requiresAttention = false
-                            if $0.status == .waitingForApproval { $0.status = .running }
+                            Self.releaseTransaction(&$0, requestID: rid, state: .expired)
                         }
+                        releases.append(rid)
                     } else if let deadline = approval.fallbackDeadline, now >= deadline {
                         let rid = approval.requestID
                         // Hybrid deadline reached: the native terminal prompt now
@@ -415,9 +693,7 @@ actor TerminalAgentBridge {
                         // immediately so the two never coexist, and stop any
                         // countdown. A later stale click cannot answer it (gone).
                         store.update(id: session.id) {
-                            $0.approval = nil
-                            $0.pendingApprovalRequestID = nil
-                            $0.requiresAttention = false
+                            Self.releaseTransaction(&$0, requestID: rid, state: .fellBack)
                         }
                         releases.append(rid)
                     }

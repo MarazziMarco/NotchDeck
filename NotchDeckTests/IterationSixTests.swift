@@ -78,7 +78,7 @@ final class AgentsLiveSourceTests: XCTestCase {
         let store = AgentSessionStore(fileName: "la-\(UUID().uuidString).json")
         // A genuine approval requires a live PendingApproval (from a PermissionRequest),
         // not merely waitingForApproval status.
-        let e = TerminalAgentEvent(type: .toolPermissionRequested, provider: .claudeCode,
+        let e = TerminalAgentEvent(type: .permissionRequested, provider: .claudeCode,
                                    sessionID: "S", cwd: "/tmp", timestamp: Date().timeIntervalSince1970,
                                    requestID: "R1")
         let session = TerminalAgentBridge.reduce(existing: nil, id: UUID(), event: e, now: Date())
@@ -149,12 +149,4 @@ final class FocusNavigationTests: XCTestCase {
         XCTAssertFalse(state.isPinnedByUser)
     }
 
-    func testFocusAgentNavigation() {
-        let state = AppState(settings: SettingsStore.inMemory())
-        let id = UUID()
-        state.focusAgent(id)
-        XCTAssertEqual(state.focusedAgentID, id)
-        state.clearFocus()
-        XCTAssertNil(state.focusedAgentID)
-    }
 }

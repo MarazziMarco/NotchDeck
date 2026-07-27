@@ -119,4 +119,5 @@ actor ManagedProcess {
 
     var running: Bool { isRunning }
     var pid: Int32 { process.processIdentifier }
+    var livePID: Int32? { isRunning ? process.processIdentifier : nil }
 }

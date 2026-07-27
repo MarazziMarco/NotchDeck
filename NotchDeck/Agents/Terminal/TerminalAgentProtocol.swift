@@ -5,10 +5,17 @@ import Foundation
 /// Foundation-only so it can be shared by both the app and the CLI helper target.
 public enum TerminalAgentProtocol {
     /// Bump when the wire format changes incompatibly.
-    public static let version = 1
+    public static let version = 2
 
     /// Socket path under the user's Application Support. User-only directory.
     public static func socketURL() -> URL {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["NOTCHDECK_AGENT_HOOK_TESTING"] == "1",
+           let path = ProcessInfo.processInfo.environment["NOTCHDECK_TEST_SOCKET_PATH"],
+           path.hasPrefix(FileManager.default.temporaryDirectory.path + "/") {
+            return URL(fileURLWithPath: path)
+        }
+        #endif
         let base = FileManager.default.urls(for: .applicationSupportDirectory,
                                             in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
@@ -24,11 +31,14 @@ public enum TerminalAgentProtocol {
 /// outlives the UI decision window.
 public enum HookTimeouts {
     public static let uiFallbackSeconds: TimeInterval = 8
-    public static let helperHardDeadlineSeconds: TimeInterval = 15
+    public static let maximumUIFallbackSeconds: TimeInterval = 15
+    public static let notchOnlyDecisionSeconds: TimeInterval = 20
+    public static let helperHardDeadlineSeconds: TimeInterval = 25
     public static let claudeHookTimeoutSeconds: Int = 30
 
     public static var isValidHierarchy: Bool {
-        uiFallbackSeconds < helperHardDeadlineSeconds
+        maximumUIFallbackSeconds < notchOnlyDecisionSeconds
+            && notchOnlyDecisionSeconds < helperHardDeadlineSeconds
             && helperHardDeadlineSeconds < TimeInterval(claudeHookTimeoutSeconds)
     }
 }
@@ -38,14 +48,11 @@ public enum TerminalAgentEventType: String, Codable {
     case sessionResumed
     case userPromptSubmitted
     case toolStarted
-    /// AUTHORITATIVE synchronous decision channel. Fired from the PreToolUse hook,
-    /// which is the only hook whose `permissionDecision` the installed Claude CLI
-    /// actually consumes (verified live). This event CREATES the NotchDeck
-    /// approval and the helper blocks on it for the Allow/Deny decision.
+    /// Legacy PreToolUse decision event retained for compatibility with v3
+    /// helpers. New installs treat it as activity and release it safely.
     case toolPermissionRequested
-    /// OBSERVER only. The PermissionRequest hook still fires (before the native
-    /// prompt) but the CLI does not consume its decision, so it never creates a
-    /// second approval for a PreToolUse transaction already represented.
+    /// Authoritative human-in-the-loop hook. The helper blocks on this exact
+    /// connection until NotchDeck answers or releases it to the native prompt.
     case permissionRequested
     case toolCompleted
     case agentStopped
@@ -55,11 +62,14 @@ public enum TerminalAgentEventType: String, Codable {
     /// This proves the bytes were emitted — NOT that the provider parsed/accepted
     /// them. The UI shows "Sent to Claude", never "Approved", on this signal.
     case responseWritten
+    /// Helper closed provider-facing stdout and is about to close its bridge
+    /// socket. Still not proof that the provider accepted the response.
+    case helperExited
     /// Deprecated alias of `responseWritten` (older helper builds).
     case decisionDelivered
 }
 
-public enum TerminalAgentProvider: String, Codable {
+public enum TerminalAgentProvider: String, Codable, Sendable {
     case codex
     case claudeCode
     case unknown
@@ -104,6 +114,9 @@ public struct TerminalAgentEvent: Codable, Equatable {
     public var terminalApp: String?
     /// Correlates a permission request with its decision response.
     public var requestID: String?
+    /// Unique per helper invocation. Provider-native request IDs are not
+    /// globally unique across sessions and therefore never own a socket.
+    public var transactionID: String?
     /// Optional tool-use identity for precise approval correlation.
     public var toolUseID: String?
     /// Provider hook field (e.g. Stop's last_assistant_message) when available.
@@ -129,6 +142,7 @@ public struct TerminalAgentEvent: Codable, Equatable {
                 tty: String? = nil,
                 terminalApp: String? = nil,
                 requestID: String? = nil,
+                transactionID: String? = nil,
                 toolUseID: String? = nil,
                 lastAssistantMessage: String? = nil,
                 transcriptPath: String? = nil,
@@ -150,6 +164,7 @@ public struct TerminalAgentEvent: Codable, Equatable {
         self.tty = tty
         self.terminalApp = terminalApp
         self.requestID = requestID
+        self.transactionID = transactionID
         self.toolUseID = toolUseID
         self.lastAssistantMessage = lastAssistantMessage
         self.transcriptPath = transcriptPath
@@ -163,7 +178,10 @@ public struct TerminalAgentEvent: Codable, Equatable {
 public struct TerminalAgentDecision: Codable, Equatable {
     public enum Behavior: String, Codable { case allow, deny }
     public var protocolVersion: Int
+    /// Provider-native request identity retained for correlation.
     public var requestID: String
+    /// Exact helper invocation that owns the live socket.
+    public var transactionID: String
     public var behavior: Behavior
     public var message: String?
     /// When true this is a RELEASE, not a decision: the helper should stop
@@ -172,64 +190,199 @@ public struct TerminalAgentDecision: Codable, Equatable {
     /// instead of blocking to its hard deadline.
     public var fallback: Bool
 
-    public init(requestID: String, behavior: Behavior, message: String? = nil, fallback: Bool = false) {
+    public init(requestID: String, transactionID: String? = nil,
+                behavior: Behavior, message: String? = nil, fallback: Bool = false) {
         self.protocolVersion = TerminalAgentProtocol.version
         self.requestID = requestID
+        self.transactionID = transactionID ?? requestID
         self.behavior = behavior
         self.message = message
         self.fallback = fallback
     }
 }
 
-/// The EXACT provider stdout contract a PermissionRequest hook must emit.
-///
-/// Audited against the installed CLIs (Claude Code 2.1.x, Codex 0.14x): the
-/// `PermissionRequest` hook is answered by
-///   {"hookSpecificOutput":{"hookEventName":"PermissionRequest","permissionDecision":"allow"|"deny"[,"permissionDecisionReason":"…"]}}
-/// The `hookEventName` MUST equal the firing hook event, `permissionDecision`
-/// MUST be one of allow/deny/ask/defer (a plain string — NOT the PreToolUse
-/// `decision:{behavior}` / SDK `{behavior,updatedInput}` shape). An unrecognised
-/// shape is rejected by the CLI ("Unknown hook permissionDecision type") and it
-/// falls back to its own native prompt — the double-confirmation bug.
-///
-/// stdout must contain ONLY this line; all diagnostics go to stderr / the log.
-public enum PermissionResponse {
-    /// The AUTHORITATIVE hook event whose `permissionDecision` the CLI consumes.
-    /// Verified live: a PreToolUse hook returning permissionDecision allow/deny is
-    /// honoured; a PermissionRequest hook's decision is not.
-    public static let decisionHookEvent = "PreToolUse"
+public struct AgentPermissionRequest: Equatable {
+    public let provider: TerminalAgentProvider
+    public let sessionID: String
+    public let turnID: String?
+    public let toolName: String?
+    public let cwd: String?
+    public let requestID: String
+}
 
-    /// Provider-valid decision JSON (no trailing newline). `hookEvent` MUST equal
-    /// the firing hook event (the CLI validates it). Deterministic key order via
-    /// sorted keys so it is exactly assertable in tests.
-    public static func json(provider: TerminalAgentProvider,
-                            behavior: TerminalAgentDecision.Behavior,
-                            message: String?,
-                            hookEvent: String = decisionHookEvent) -> String {
-        let decision = behavior == .allow ? "allow" : "deny"
-        let obj: [String: Any]
-        switch provider {
-        case .claudeCode, .codex:
-            var inner: [String: Any] = ["hookEventName": hookEvent,
-                                        "permissionDecision": decision]
-            if behavior == .deny {
-                inner["permissionDecisionReason"] = message ?? "Denied in NotchDeck"
-            }
-            obj = ["hookSpecificOutput": inner]
-        case .unknown:
-            obj = ["permissionDecision": decision]
-        }
-        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
-              let str = String(data: data, encoding: .utf8) else { return "" }
-        return str
+public enum AgentPermissionAdapterError: Error, Equatable {
+    case wrongEvent
+    case missingSessionID
+    case missingTurnID
+}
+
+/// Each CLI owns its payload parsing, correlation key, response encoding, and
+/// empty-output fallback. The shared UI never guesses a provider schema.
+public protocol AgentPermissionProvider {
+    var provider: TerminalAgentProvider { get }
+    func parse(_ payload: [String: Any]) throws -> AgentPermissionRequest
+    func response(behavior: TerminalAgentDecision.Behavior, message: String?) -> Data
+    func fallbackResponse() -> Data
+}
+
+private enum PermissionPayload {
+    static func string(_ payload: [String: Any], _ key: String) -> String? {
+        guard let value = payload[key] as? String, !value.isEmpty else { return nil }
+        return value
     }
 
-    /// The exact bytes the helper writes to stdout: the JSON line + one newline.
-    public static func stdoutLine(provider: TerminalAgentProvider,
-                                  behavior: TerminalAgentDecision.Behavior,
-                                  message: String?,
-                                  hookEvent: String = decisionHookEvent) -> String {
-        json(provider: provider, behavior: behavior, message: message, hookEvent: hookEvent) + "\n"
+    static func canonicalHash(_ value: Any?) -> String {
+        guard let value,
+              let data = try? JSONSerialization.data(
+                withJSONObject: value,
+                options: [.sortedKeys, .fragmentsAllowed]
+              )
+        else { return "0" }
+        // Stable FNV-1a is sufficient for an internal correlation key. Raw input
+        // is never persisted or logged.
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in data {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(hash, radix: 16)
+    }
+
+    static func line(_ object: [String: Any]) -> Data {
+        guard var data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
+            return Data()
+        }
+        data.append(0x0A)
+        return data
+    }
+}
+
+public struct ClaudePermissionAdapter: AgentPermissionProvider {
+    public let provider: TerminalAgentProvider = .claudeCode
+    public init() {}
+
+    public func parse(_ payload: [String: Any]) throws -> AgentPermissionRequest {
+        guard PermissionPayload.string(payload, "hook_event_name") == "PermissionRequest" else {
+            throw AgentPermissionAdapterError.wrongEvent
+        }
+        guard let session = PermissionPayload.string(payload, "session_id") else {
+            throw AgentPermissionAdapterError.missingSessionID
+        }
+        let tool = PermissionPayload.string(payload, "tool_name")
+        let native = PermissionPayload.string(payload, "request_id")
+        let hash = PermissionPayload.canonicalHash(payload["tool_input"])
+        let requestID = native ?? [session, tool ?? "tool", hash].joined(separator: "|")
+        return AgentPermissionRequest(
+            provider: provider,
+            sessionID: session,
+            turnID: PermissionPayload.string(payload, "turn_id"),
+            toolName: tool,
+            cwd: PermissionPayload.string(payload, "cwd"),
+            requestID: requestID
+        )
+    }
+
+    public func response(
+        behavior: TerminalAgentDecision.Behavior,
+        message: String?
+    ) -> Data {
+        var decision: [String: Any] = ["behavior": behavior.rawValue]
+        if behavior == .deny {
+            decision["interrupt"] = false
+            decision["message"] = message ?? "Denied in NotchDeck"
+        }
+        return PermissionPayload.line([
+            "hookSpecificOutput": [
+                "hookEventName": "PermissionRequest",
+                "decision": decision,
+            ],
+        ])
+    }
+
+    public func fallbackResponse() -> Data { Data() }
+}
+
+public struct CodexPermissionAdapter: AgentPermissionProvider {
+    public let provider: TerminalAgentProvider = .codex
+    public init() {}
+
+    public func parse(_ payload: [String: Any]) throws -> AgentPermissionRequest {
+        guard PermissionPayload.string(payload, "hook_event_name") == "PermissionRequest" else {
+            throw AgentPermissionAdapterError.wrongEvent
+        }
+        guard let session = PermissionPayload.string(payload, "session_id") else {
+            throw AgentPermissionAdapterError.missingSessionID
+        }
+        guard let turn = PermissionPayload.string(payload, "turn_id") else {
+            throw AgentPermissionAdapterError.missingTurnID
+        }
+        let tool = PermissionPayload.string(payload, "tool_name")
+        let hash = PermissionPayload.canonicalHash(payload["tool_input"])
+        let requestID = [session, turn, tool ?? "tool", hash].joined(separator: "|")
+        return AgentPermissionRequest(
+            provider: provider,
+            sessionID: session,
+            turnID: turn,
+            toolName: tool,
+            cwd: PermissionPayload.string(payload, "cwd"),
+            requestID: requestID
+        )
+    }
+
+    public func response(
+        behavior: TerminalAgentDecision.Behavior,
+        message: String?
+    ) -> Data {
+        var decision: [String: Any] = ["behavior": behavior.rawValue]
+        if behavior == .deny {
+            decision["message"] = message ?? "Denied in NotchDeck"
+        }
+        return PermissionPayload.line([
+            "hookSpecificOutput": [
+                "hookEventName": "PermissionRequest",
+                "decision": decision,
+            ],
+        ])
+    }
+
+    public func fallbackResponse() -> Data { Data() }
+}
+
+public enum AgentPermissionProviders {
+    public static func adapter(for provider: TerminalAgentProvider) -> (any AgentPermissionProvider)? {
+        switch provider {
+        case .claudeCode: return ClaudePermissionAdapter()
+        case .codex: return CodexPermissionAdapter()
+        case .unknown: return nil
+        }
+    }
+}
+
+/// Compatibility entry point retained for existing callers while all encoding
+/// is delegated to the provider-specific adapter.
+public enum PermissionResponse {
+    public static let decisionHookEvent = "PermissionRequest"
+
+    public static func json(
+        provider: TerminalAgentProvider,
+        behavior: TerminalAgentDecision.Behavior,
+        message: String?,
+        hookEvent: String = decisionHookEvent
+    ) -> String {
+        guard hookEvent == decisionHookEvent,
+              let adapter = AgentPermissionProviders.adapter(for: provider) else { return "" }
+        return String(decoding: adapter.response(behavior: behavior, message: message).dropLast(), as: UTF8.self)
+    }
+
+    public static func stdoutLine(
+        provider: TerminalAgentProvider,
+        behavior: TerminalAgentDecision.Behavior,
+        message: String?,
+        hookEvent: String = decisionHookEvent
+    ) -> String {
+        guard hookEvent == decisionHookEvent,
+              let adapter = AgentPermissionProviders.adapter(for: provider) else { return "" }
+        return String(decoding: adapter.response(behavior: behavior, message: message), as: UTF8.self)
     }
 }
 

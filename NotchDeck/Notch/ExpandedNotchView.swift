@@ -72,8 +72,6 @@ struct ExpandedNotchView: View {
     @ViewBuilder private var content: some View {
         if let moduleID = appState.focusedModuleID {
             FocusContainer(moduleID: moduleID)
-        } else if appState.focusedAgentID != nil {
-            AgentFocusContainer()
         } else {
             switch appState.face {
             case .utilities: UtilitiesFaceView()

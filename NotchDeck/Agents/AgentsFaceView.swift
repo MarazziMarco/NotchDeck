@@ -6,7 +6,6 @@ import SwiftUI
 struct AgentsFaceView: View {
     @EnvironmentObject private var store: AgentSessionStore
     @EnvironmentObject private var coordinator: AgentCoordinator
-    @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var env: AppEnvironment
 
@@ -21,14 +20,21 @@ struct AgentsFaceView: View {
             header
             tabBar
             if let msg = coordinator.lastFocusMessage {
+                let succeeded = msg == TerminalFocusFeedback.focused
                 HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.circle")
+                    Image(systemName: succeeded ? "checkmark.circle" : "exclamationmark.circle")
                     Text(msg).lineLimit(2)
                     Spacer(minLength: 0)
                     Button { coordinator.lastFocusMessage = nil } label: { Image(systemName: "xmark") }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("Dismiss Terminal status")
                 }
-                .font(.system(size: 10)).foregroundStyle(DesignTokens.Palette.statusAttention)
+                .font(.system(size: 10))
+                .foregroundStyle(
+                    succeeded
+                        ? DesignTokens.Palette.statusSuccess
+                        : DesignTokens.Palette.statusAttention
+                )
                 .padding(.horizontal, 12)
             }
             content
@@ -92,6 +98,7 @@ struct AgentsFaceView: View {
             .foregroundStyle(selected ? DesignTokens.Palette.primaryText : DesignTokens.Palette.tertiaryText)
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     @ViewBuilder private var content: some View {
@@ -107,10 +114,9 @@ struct AgentsFaceView: View {
                             maxPreviewLines: settings.settings.agentMaxPreviewLines,
                             showPreview: settings.settings.latestMessagePreviewEnabled,
                             approvalSending: coordinator.approvalInFlight.contains(session.id),
+                            bucket: tab == .active ? .active : .recent,
                             actions: actions(for: session))
                         .opacity(tab == .recent ? 0.82 : 1)   // Recent is visually secondary
-                        .contentShape(Rectangle())
-                        .onTapGesture { appState.focusAgent(session.id) }
                     }
                 }
                 .padding(.horizontal, 12).padding(.bottom, 6)

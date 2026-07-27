@@ -28,7 +28,7 @@ final class PointerTrackingServiceTests: XCTestCase {
 
 final class TerminalProtocolTests: XCTestCase {
     func testProtocolVersion() {
-        XCTAssertEqual(TerminalAgentProtocol.version, 1)
+        XCTAssertEqual(TerminalAgentProtocol.version, 2)
     }
 
     func testSocketPathUnderApplicationSupport() {
@@ -39,14 +39,15 @@ final class TerminalProtocolTests: XCTestCase {
     }
 
     func testEventCodecRoundTrip() throws {
-        let event = TerminalAgentEvent(type: .toolPermissionRequested, provider: .claudeCode,
+        let event = TerminalAgentEvent(type: .permissionRequested, provider: .claudeCode,
                                        sessionID: "s1", cwd: "/tmp/p", timestamp: 123,
-                                       toolName: "Bash", summary: "ls", requestID: "r1")
+                                       toolName: "Bash", summary: "ls", requestID: "r1",
+                                       transactionID: "tx1")
         let line = TerminalAgentCodec.encodeLine(event)!
         let str = String(data: line, encoding: .utf8)!.trimmingCharacters(in: .newlines)
         let decoded = TerminalAgentCodec.decodeEvent(str)
         XCTAssertEqual(decoded, event)
-        XCTAssertEqual(decoded?.protocolVersion, 1)
+        XCTAssertEqual(decoded?.protocolVersion, 2)
     }
 
     func testDecisionCodecRoundTrip() throws {
@@ -79,7 +80,7 @@ final class TerminalBridgeReduceTests: XCTestCase {
     }
 
     func testPermissionRequestedNeedsApproval() {
-        let s = TerminalAgentBridge.reduce(existing: nil, id: id, event: event(.toolPermissionRequested, requestID: "r9"))
+        let s = TerminalAgentBridge.reduce(existing: nil, id: id, event: event(.permissionRequested, requestID: "r9"))
         XCTAssertEqual(s.status, .waitingForApproval)
         XCTAssertTrue(s.requiresAttention)
         XCTAssertEqual(s.pendingApprovalRequestID, "r9")

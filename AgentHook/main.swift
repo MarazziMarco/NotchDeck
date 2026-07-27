@@ -48,6 +48,11 @@ enum HookLog {
     static let maxBytes = 64 * 1024
 
     static func line(_ msg: String) {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["NOTCHDECK_AGENT_HOOK_TESTING"] == "1" {
+            return
+        }
+        #endif
         let ts = ISO8601DateFormatter().string(from: Date())
         let entry = "\(ts) \(msg)\n"
         let u = url
@@ -74,7 +79,8 @@ func string(_ dict: [String: Any], _ keys: [String]) -> String? {
 }
 
 func currentTTY() -> String? {
-    guard let name = ttyname(STDIN_FILENO) ?? ttyname(STDERR_FILENO) else { return nil }
+    guard let name = ttyname(STDIN_FILENO) ?? ttyname(STDOUT_FILENO) ?? ttyname(STDERR_FILENO)
+    else { return nil }
     return String(cString: name)
 }
 
@@ -97,17 +103,34 @@ func connectSocket() -> Int32 {
         p.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, len) }
     }
     if ok != 0 { close(fd); return -1 }
+    var noSignal: Int32 = 1
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
     return fd
 }
 
-func send(_ fd: Int32, _ event: TerminalAgentEvent) {
-    guard let data = TerminalAgentCodec.encodeLine(event) else { return }
-    _ = data.withUnsafeBytes { write(fd, $0.baseAddress, data.count) }
+@discardableResult
+func send(_ fd: Int32, _ event: TerminalAgentEvent) -> Bool {
+    guard let data = TerminalAgentCodec.encodeLine(event) else { return false }
+    var offset = 0
+    return data.withUnsafeBytes { bytes in
+        guard let base = bytes.baseAddress else { return false }
+        while offset < data.count {
+            let count = write(fd, base.advanced(by: offset), data.count - offset)
+            if count > 0 {
+                offset += count
+            } else if count < 0, errno == EINTR {
+                continue
+            } else {
+                return false
+            }
+        }
+        return true
+    }
 }
 
 /// Wait up to `timeout` seconds for a decision line. Uses a 1s receive timeout
 /// and loops until the deadline. Returns nil on timeout.
-func awaitDecision(_ fd: Int32, requestID: String, timeout: TimeInterval) -> TerminalAgentDecision? {
+func awaitDecision(_ fd: Int32, transactionID: String, timeout: TimeInterval) -> TerminalAgentDecision? {
     var tv = timeval(tv_sec: 1, tv_usec: 0)
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
 
@@ -123,7 +146,7 @@ func awaitDecision(_ fd: Int32, requestID: String, timeout: TimeInterval) -> Ter
                 pending.removeSubrange(pending.startIndex...nl)
                 if let line = String(data: lineData, encoding: .utf8),
                    let decision = TerminalAgentCodec.decodeDecision(line),
-                   decision.requestID == requestID {
+                   decision.transactionID == transactionID {
                     // A release means the app hit its fallback deadline: stop
                     // waiting and let the CLI show its native prompt (empty stdout).
                     if decision.fallback { return nil }
@@ -145,11 +168,12 @@ func awaitDecision(_ fd: Int32, requestID: String, timeout: TimeInterval) -> Ter
 /// line; diagnostics go to the log file / stderr. stdout is flushed explicitly
 /// (piped stdout is block-buffered) before the helper exits.
 func emitDecision(provider: TerminalAgentProvider, decision: TerminalAgentDecision) {
-    let line = PermissionResponse.stdoutLine(provider: provider,
-                                             behavior: decision.behavior,
-                                             message: decision.message)
-    FileHandle.standardOutput.write(Data(line.utf8))
-    fflush(stdout)
+    guard let adapter = AgentPermissionProviders.adapter(for: provider) else { return }
+    FileHandle.standardOutput.write(
+        adapter.response(behavior: decision.behavior, message: decision.message)
+    )
+    try? FileHandle.standardOutput.synchronize()
+    try? FileHandle.standardOutput.close()
 }
 
 // MARK: Main
@@ -160,18 +184,31 @@ let payload = readStdin()
 let sessionID = string(payload, ["session_id", "sessionId", "thread_id", "threadId"]) ?? "unknown"
 let cwd = string(payload, ["cwd", "workingDirectory", "project_dir"]) ?? FileManager.default.currentDirectoryPath
 let toolName = string(payload, ["tool_name", "toolName", "tool"])
-let summary = string(payload, ["command", "description", "message"]).map { String($0.prefix(200)) }
-// Correlation identity: prefer the provider's tool-use id (stable across the
-// PreToolUse decision and any later PermissionRequest/PostToolUse for the same
-// tool), then an explicit request id, else a generated id.
+let summary: String? = nil
 let toolUseID = string(payload, ["tool_use_id", "toolUseId"])
-let requestID = toolUseID ?? string(payload, ["request_id", "requestId"]) ?? UUID().uuidString
+let turnID = string(payload, ["turn_id", "turnId"])
 // Real hook event name from the CLI payload (for logging accuracy).
 let hookEventName = string(payload, ["hook_event_name", "hookEventName"]) ?? args.event.rawValue
-// The PreToolUse hook is the authoritative synchronous decision channel.
-let isDecisionHook = (args.event == .toolPermissionRequested)
+let parsedPermission: AgentPermissionRequest?
+if let adapter = AgentPermissionProviders.adapter(for: args.provider) {
+    parsedPermission = try? adapter.parse(payload)
+} else {
+    parsedPermission = nil
+}
+let isDecisionHook = (args.event == .permissionRequested)
+// Unsupported or malformed decision hooks fail safely with empty stdout. They
+// must never become functional approval cards using a guessed identity/schema.
+guard !isDecisionHook || parsedPermission != nil else {
+    HookLog.line("permission parse failed → native fallback exit 0")
+    exit(0)
+}
+let requestID = parsedPermission?.requestID
+    ?? toolUseID
+    ?? string(payload, ["request_id", "requestId"])
+    ?? UUID().uuidString
+let transactionID = isDecisionHook ? UUID().uuidString : nil
 
-HookLog.line("event=\(hookEventName) provider=\(args.provider.cliName) session=\(abbreviated(sessionID)) helper=\(CommandLine.arguments.first ?? "?") socket=\(TerminalAgentProtocol.socketURL().path)")
+HookLog.line("event=\(hookEventName) provider=\(args.provider.cliName) session=\(abbreviated(sessionID))")
 
 var event = TerminalAgentEvent(
     type: args.event,
@@ -179,13 +216,15 @@ var event = TerminalAgentEvent(
     sessionID: sessionID,
     cwd: cwd,
     timestamp: Date().timeIntervalSince1970,
+    turnID: turnID,
     toolName: toolName,
     summary: summary,
     pid: getpid(),
     ppid: getppid(),
     tty: currentTTY(),
     terminalApp: ProcessInfo.processInfo.environment["TERM_PROGRAM"],
-    requestID: isDecisionHook ? requestID : (args.event == .permissionRequested ? requestID : nil),
+    requestID: isDecisionHook ? requestID : nil,
+    transactionID: transactionID,
     toolUseID: toolUseID)
 
 let fd = connectSocket()
@@ -202,17 +241,22 @@ if isDecisionHook {
     // exceeds the helper hard deadline). The deadline is longer than the app's UI
     // fallback so the user has time to choose; the app sends an explicit release
     // at its fallback deadline.
-    if let decision = awaitDecision(fd, requestID: requestID,
+    if let transactionID,
+       let decision = awaitDecision(fd, transactionID: transactionID,
                                     timeout: HookTimeouts.helperHardDeadlineSeconds) {
         HookLog.line("decision received: \(decision.behavior.rawValue)")
         // Write ONLY the provider response to the original stdout, flush it, then
         // notify the app that the bytes were written (NOT that the provider
         // accepted them). No provider-facing descriptor is kept open afterwards.
         emitDecision(provider: args.provider, decision: decision)
-        send(fd, TerminalAgentEvent(type: .responseWritten, provider: args.provider,
-                                    sessionID: sessionID, timestamp: Date().timeIntervalSince1970,
-                                    requestID: requestID, toolUseID: toolUseID))
-        HookLog.line("responseWritten ack sent")
+        _ = send(fd, TerminalAgentEvent(type: .responseWritten, provider: args.provider,
+                                        sessionID: sessionID, timestamp: Date().timeIntervalSince1970,
+                                        requestID: requestID, transactionID: transactionID,
+                                        toolUseID: toolUseID))
+        _ = send(fd, TerminalAgentEvent(type: .helperExited, provider: args.provider,
+                                        sessionID: sessionID, timestamp: Date().timeIntervalSince1970,
+                                        requestID: requestID, transactionID: transactionID,
+                                        toolUseID: toolUseID))
     } else {
         // Timeout / release → print nothing → CLI resumes its native permission
         // flow. The helper does not wait for any further app message.

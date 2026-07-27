@@ -39,26 +39,26 @@ final class HookMismatchTests: XCTestCase {
         // Simulate an old install whose PermissionRequest timeout is 20, not 30.
         var merged = HookInstaller.mergeHooks(base: [:], provider: .claudeCode, helper: "/tmp/h")
         var hooks = merged["hooks"] as! [String: Any]
-        var prs = hooks["PreToolUse"] as! [[String: Any]]
+        var prs = hooks["PermissionRequest"] as! [[String: Any]]
         var entry = prs[0]
         var inner = (entry["hooks"] as! [[String: Any]])
         inner[0]["timeout"] = 20
         entry["hooks"] = inner
         prs[0] = entry
-        hooks["PreToolUse"] = prs
+        hooks["PermissionRequest"] = prs
         merged["hooks"] = hooks
         XCTAssertFalse(HookInstaller.configIsUpToDate(merged, provider: .claudeCode))
     }
     func testAsyncPermissionRequestDetectedStale() {
         var merged = HookInstaller.mergeHooks(base: [:], provider: .claudeCode, helper: "/tmp/h")
         var hooks = merged["hooks"] as! [String: Any]
-        var prs = hooks["PreToolUse"] as! [[String: Any]]
+        var prs = hooks["PermissionRequest"] as! [[String: Any]]
         var entry = prs[0]
         var inner = (entry["hooks"] as! [[String: Any]])
         inner[0]["async"] = true
         entry["hooks"] = inner
         prs[0] = entry
-        hooks["PreToolUse"] = prs
+        hooks["PermissionRequest"] = prs
         merged["hooks"] = hooks
         XCTAssertFalse(HookInstaller.configIsUpToDate(merged, provider: .claudeCode))
     }

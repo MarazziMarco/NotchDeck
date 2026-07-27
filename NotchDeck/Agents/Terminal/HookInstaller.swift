@@ -6,6 +6,12 @@ import AppKit
 /// timestamps a backup before writing, and marks its own entries so they can be
 /// removed cleanly. Command strings reference the bundled helper.
 enum HookInstaller {
+    enum HookTrustStatus: Equatable {
+        case notApplicable
+        case approvalRequired
+        case reviewed
+        case unknown
+    }
 
     struct Plan: Equatable {
         var provider: TerminalAgentProvider
@@ -36,10 +42,11 @@ enum HookInstaller {
     ///
     /// v2: PermissionRequest response corrected to the provider-valid
     ///     `hookSpecificOutput.permissionDecision` schema (was `decision:{behavior}`).
-    /// v3: PreToolUse is now the AUTHORITATIVE synchronous decision hook (the only
-    ///     hook whose permissionDecision the CLI consumes, verified live);
-    ///     PermissionRequest is a non-blocking observer.
-    static let managedHookVersion = 3
+    /// v3: legacy PreToolUse decision experiment.
+    /// v4: provider-specific PermissionRequest decision contract; PreToolUse is
+    ///     enrichment only.
+    /// v5: per-helper transaction identity prevents cross-session socket reuse.
+    static let managedHookVersion = 5
     static let managedVersionKey = "notchdeckHookVersion"
 
     // MARK: Helper install
@@ -91,8 +98,8 @@ enum HookInstaller {
         case .codex:
             return [
                 ("SessionStart", .sessionStarted, false),
-                ("PreToolUse", .toolPermissionRequested, true),   // AUTHORITATIVE decision hook
-                ("PermissionRequest", .permissionRequested, false), // observer only
+                ("PreToolUse", .toolStarted, true),
+                ("PermissionRequest", .permissionRequested, true),
                 ("PostToolUse", .toolCompleted, false),
                 ("Stop", .agentStopped, false),
                 ("SessionEnd", .sessionEnded, false),
@@ -100,8 +107,8 @@ enum HookInstaller {
         case .claudeCode:
             return [
                 ("SessionStart", .sessionStarted, false),
-                ("PreToolUse", .toolPermissionRequested, true),   // AUTHORITATIVE decision hook
-                ("PermissionRequest", .permissionRequested, true),  // observer only (native fallback)
+                ("PreToolUse", .toolStarted, true),
+                ("PermissionRequest", .permissionRequested, true),
                 ("PostToolUse", .toolCompleted, true),
                 ("Stop", .agentStopped, false),
                 ("SessionEnd", .sessionEnded, false),
@@ -156,11 +163,9 @@ enum HookInstaller {
     /// current expected schema (managed marker) and timeout. Pure over a config
     /// dict for testability.
     static func configIsUpToDate(_ json: [String: Any], provider: TerminalAgentProvider) -> Bool {
-        // The synchronous decision hook is now PreToolUse (the CLI-honoured
-        // channel). Validate that entry is present, blocking, correctly timed and
-        // at the current managed version.
+        // PermissionRequest is the synchronous human-decision channel.
         guard let hooks = hooksDictionary(json, provider: provider),
-              let entries = hooks["PreToolUse"] as? [[String: Any]] else { return false }
+              let entries = hooks["PermissionRequest"] as? [[String: Any]] else { return false }
         let managed = entries.filter { containsMarker($0) }
         guard managed.count == 1, let inner = (managed[0]["hooks"] as? [[String: Any]])?.first else { return false }
         if inner["async"] != nil { return false }
@@ -175,6 +180,26 @@ enum HookInstaller {
         let json = loadJSON(configURL(for: provider))
         guard hasMarker(in: json, provider: provider) else { return false }
         return !configIsUpToDate(json, provider: provider)
+    }
+
+    /// Codex 0.144.x stores reviewed hook identities in config.toml. This is
+    /// intentionally conservative: absence of the PermissionRequest trust entry
+    /// is definitive; presence means reviewed, while hook silence alone is never
+    /// interpreted as untrusted.
+    static func trustStatus(_ provider: TerminalAgentProvider) -> HookTrustStatus {
+        guard provider == .codex else { return .notApplicable }
+        let config = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/config.toml")
+        guard let text = try? String(contentsOf: config) else { return .unknown }
+        return codexTrustStatus(configText: text)
+    }
+
+    static func codexTrustStatus(configText: String) -> HookTrustStatus {
+        guard configText.contains("[hooks.state]") else { return .approvalRequired }
+        let normalized = configText.lowercased()
+        return normalized.contains(":permission_request:")
+            ? .reviewed
+            : .approvalRequired
     }
 
     /// Human-readable preview of what will change (the merged hook block).
@@ -225,10 +250,9 @@ enum HookInstaller {
             // longer than the app's 8s UI fallback so the user has time to choose.
             var hookDict: [String: Any] = ["type": "command", "command": cmd, managedKey: true,
                                            managedVersionKey: managedHookVersion]
-            // The synchronous decision hook (PreToolUse) must be blocking with a
-            // timeout longer than the app's UI fallback so the user has time to
-            // decide before the CLI resumes its native flow.
-            if spec.event == .toolPermissionRequested { hookDict["timeout"] = HookTimeouts.claudeHookTimeoutSeconds }
+            if spec.event == .permissionRequested {
+                hookDict["timeout"] = HookTimeouts.claudeHookTimeoutSeconds
+            }
             var entry: [String: Any] = ["hooks": [hookDict], managedKey: true]
             if spec.matcher { entry["matcher"] = "*" }
             var array = (hooks[spec.hookEvent] as? [[String: Any]]) ?? []

@@ -105,6 +105,13 @@ struct TerminalIntegrationView: View {
                 }
             }
 
+            if installed && provider == .codex
+                && HookInstaller.trustStatus(.codex) == .approvalRequired {
+                Label("Codex hook approval required", systemImage: "checkmark.shield")
+                    .font(.caption2)
+                    .foregroundStyle(DesignTokens.Palette.statusAttention)
+            }
+
             HStack(spacing: 8) {
                 Button("Preview") { preview(provider) }
                 Button("Open config") { HookInstaller.openConfigFile(provider) }

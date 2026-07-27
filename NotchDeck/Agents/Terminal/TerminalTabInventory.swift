@@ -27,11 +27,11 @@ enum TerminalTabMatching {
     static func match(tty: String, in tabs: [TerminalTabDescriptor]) -> TerminalTabDescriptor? {
         let target = canonical(tty)
         guard !target.isEmpty else { return nil }
-        return tabs.first { $0.tty == target }
+        return tabs.first { canonical($0.tty) == target }
     }
 
     static func ttySet(_ tabs: [TerminalTabDescriptor]) -> Set<String> {
-        Set(tabs.map { $0.tty })
+        Set(tabs.map { canonical($0.tty) })
     }
 }
 
@@ -43,38 +43,53 @@ enum TerminalTabInventory {
     /// selected + minimised), one row per tab: `win|tab|tty|selected|minimized`.
     static func script() -> String {
         """
-        tell application "Terminal"
-            set out to ""
-            set wi to 0
-            repeat with w in windows
-                set wi to wi + 1
-                set mz to (miniaturized of w)
-                set ti to 0
-                repeat with t in tabs of w
-                    set ti to ti + 1
-                    try
-                        set out to out & wi & "|" & ti & "|" & (tty of t) & "|" & (selected of t) & "|" & mz & "
+        with timeout of 5 seconds
+            tell application "Terminal"
+                set out to ""
+                set wi to 0
+                repeat with w in windows
+                    set wi to wi + 1
+                    set mz to (miniaturized of w)
+                    set ti to 0
+                    repeat with t in tabs of w
+                        set ti to ti + 1
+                        try
+                            set out to out & wi & "|" & ti & "|" & (tty of t) & "|" & (selected of t) & "|" & mz & "
         "
-                    end try
+                        end try
+                    end repeat
                 end repeat
-            end repeat
-            return out
-        end tell
+                return out
+            end tell
+        end timeout
         """
     }
 
-    static func parse(_ output: String) -> [TerminalTabDescriptor] {
-        output.split(whereSeparator: { $0 == "\n" || $0 == "\r" }).compactMap { row in
+    enum ParseResult: Equatable {
+        case success([TerminalTabDescriptor])
+        case malformed
+    }
+
+    static func parseDetailed(_ output: String) -> ParseResult {
+        let rows = output.split(whereSeparator: { $0 == "\n" || $0 == "\r" })
+        var tabs: [TerminalTabDescriptor] = []
+        for row in rows {
             let f = row.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
             guard f.count >= 5,
                   let wi = Int(f[0].trimmingCharacters(in: .whitespaces)),
-                  let ti = Int(f[1].trimmingCharacters(in: .whitespaces)) else { return nil }
+                  let ti = Int(f[1].trimmingCharacters(in: .whitespaces)) else { return .malformed }
             let tty = TerminalTabMatching.canonical(f[2])
-            guard tty.hasPrefix("/dev/tty") else { return nil }
+            guard TerminalTTYValidator.isValid(tty) else { return .malformed }
             func bool(_ s: String) -> Bool { s.trimmingCharacters(in: .whitespaces).lowercased() == "true" }
-            return TerminalTabDescriptor(windowIndex: wi, tabIndex: ti, tty: tty,
-                                         selected: bool(f[3]), minimized: bool(f[4]))
+            tabs.append(TerminalTabDescriptor(windowIndex: wi, tabIndex: ti, tty: tty,
+                                              selected: bool(f[3]), minimized: bool(f[4])))
         }
+        return .success(tabs)
+    }
+
+    static func parse(_ output: String) -> [TerminalTabDescriptor] {
+        if case .success(let tabs) = parseDetailed(output) { return tabs }
+        return []
     }
 
     /// Safety audit for tests: the enumeration must never spawn or run anything.
@@ -82,5 +97,15 @@ enum TerminalTabInventory {
         let banned = ["do script", "open -a", "open application", "keystroke", "set the clipboard", "the clipboard"]
         let lower = script.lowercased()
         return !banned.contains { lower.contains($0) }
+    }
+}
+
+enum TerminalTTYValidator {
+    static func isValid(_ raw: String) -> Bool {
+        let tty = TerminalTabMatching.canonical(raw)
+        guard tty.hasPrefix("/dev/tty"), tty.count > "/dev/tty".count else { return false }
+        return tty.dropFirst("/dev/".count).allSatisfy {
+            $0.isLetter || $0.isNumber || $0 == "." || $0 == "_" || $0 == "-"
+        }
     }
 }

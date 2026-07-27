@@ -86,16 +86,30 @@ struct AgentSession: Identifiable, Codable, Equatable {
     var pendingApprovalRequestID: String?
     /// Explicit live approval, present ONLY for a genuine PermissionRequest.
     var approval: PendingApproval?
+    /// Additional provider-native requests for this same process session. They
+    /// remain isolated by request ID and are promoted in arrival order after the
+    /// visible transaction leaves the helper. Optional preserves decoding of
+    /// session history written before concurrent-request support existed.
+    var queuedApprovals: [PendingApproval]? = nil
     var terminalTTY: String?
     var terminalAppName: String?
     var terminalBundleID: String? = nil
     var termSessionID: String? = nil
-    var terminalWindowID: String? = nil
-    var terminalTabID: String? = nil
     /// Process identity for liveness / exact terminal focus.
     var pid: Int32?          // agent process
     var ppid: Int32?
     var shellPID: Int32? = nil
+    /// Authoritative local process identity. PID alone is never sufficient.
+    var processIdentity: AgentProcessIdentity? = nil
+    var processPresence: AgentProcessPresence? = nil
+    var processLastSeenAt: Date? = nil
+    var processEndedAt: Date? = nil
+    /// Consecutive authoritative scans that did not contain this exact
+    /// PID/start-time identity. Optional preserves older persisted records.
+    var processMissCount: Int? = nil
+    /// Last valid controlling-terminal capture. A later nil observation does not
+    /// erase it for the same process identity.
+    var ttyCapture: AgentTTYCapture? = nil
     /// Terminal lifecycle — does the original tab/window still exist. Drives
     /// Active vs Recent, independently of activity/approval.
     var terminalPresence: AgentTerminalPresence = .unknown
@@ -167,6 +181,7 @@ struct AgentSession: Identifiable, Codable, Equatable {
     }
     /// True only for a live, functional pending approval.
     var hasLiveApproval: Bool { approval?.isLive == true }
+    var queuedApprovalCount: Int { queuedApprovals?.count ?? 0 }
 }
 
 /// Availability of a provider's CLI.

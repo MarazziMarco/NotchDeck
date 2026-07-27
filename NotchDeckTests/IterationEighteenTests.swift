@@ -11,7 +11,7 @@ final class TimeoutHierarchyTests: XCTestCase {
     }
     func testInstalledHookTimeoutMatches() {
         let merged = HookInstaller.mergeHooks(base: [:], provider: .claudeCode, helper: "/tmp/h")
-        let pr = ((merged["hooks"] as? [String: Any])?["PreToolUse"] as? [[String: Any]])?.first
+        let pr = ((merged["hooks"] as? [String: Any])?["PermissionRequest"] as? [[String: Any]])?.first
         let inner = (pr?["hooks"] as? [[String: Any]])?.first
         XCTAssertEqual(inner?["timeout"] as? Int, HookTimeouts.claudeHookTimeoutSeconds)
         XCTAssertGreaterThan(HookTimeouts.claudeHookTimeoutSeconds, Int(HookTimeouts.helperHardDeadlineSeconds))

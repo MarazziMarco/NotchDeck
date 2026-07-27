@@ -5,9 +5,11 @@ import XCTest
 
 final class ApprovalClassificationTests: XCTestCase {
     private func event(_ type: TerminalAgentEventType, provider: TerminalAgentProvider = .claudeCode,
-                       requestID: String? = nil, tool: String? = nil) -> TerminalAgentEvent {
+                       requestID: String? = nil, tool: String? = nil,
+                       turnID: String? = nil) -> TerminalAgentEvent {
         TerminalAgentEvent(type: type, provider: provider, sessionID: "S1", cwd: "/tmp/proj",
-                           timestamp: 1000, toolName: tool, summary: tool.map { "run \($0)" },
+                           timestamp: 1000, turnID: turnID, toolName: tool,
+                           summary: tool.map { "run \($0)" },
                            requestID: requestID)
     }
 
@@ -25,35 +27,40 @@ final class ApprovalClassificationTests: XCTestCase {
     }
     func testPermissionRequestCreatesOneApproval() {
         let s = TerminalAgentBridge.reduce(existing: nil, id: UUID(),
-                                           event: event(.toolPermissionRequested, requestID: "R1", tool: "Bash"))
+                                           event: event(.permissionRequested, requestID: "R1", tool: "Bash"))
         XCTAssertNotNil(s.approval)
         XCTAssertEqual(s.approval?.state, .pending)
-        XCTAssertEqual(s.approval?.rawEventName, "PreToolUse")
+        XCTAssertEqual(s.approval?.rawEventName, "PermissionRequest")
         XCTAssertEqual(s.status, .waitingForApproval)
     }
     func testDuplicatePermissionRequestNoDuplicate() {
         let id = UUID()
         let first = TerminalAgentBridge.reduce(existing: nil, id: id,
-                                               event: event(.toolPermissionRequested, requestID: "R1"), now: Date(timeIntervalSince1970: 1))
+                                               event: event(.permissionRequested, requestID: "R1"), now: Date(timeIntervalSince1970: 1))
         let second = TerminalAgentBridge.reduce(existing: first, id: id,
-                                                event: event(.toolPermissionRequested, requestID: "R1"), now: Date(timeIntervalSince1970: 99))
+                                                event: event(.permissionRequested, requestID: "R1"), now: Date(timeIntervalSince1970: 99))
         XCTAssertEqual(first.approval?.receivedAt, second.approval?.receivedAt) // same approval, not recreated
     }
     func testPostToolUseClearsApproval() {
         let id = UUID()
-        let approved = TerminalAgentBridge.reduce(existing: nil, id: id, event: event(.toolPermissionRequested, requestID: "R1"))
-        let after = TerminalAgentBridge.reduce(existing: approved, id: id, event: event(.toolCompleted))
+        let approved = TerminalAgentBridge.reduce(
+            existing: nil, id: id,
+            event: event(.permissionRequested, requestID: "R1", turnID: "turn-1"))
+        let after = TerminalAgentBridge.reduce(
+            existing: approved, id: id,
+            event: event(.toolCompleted, turnID: "turn-1"))
         XCTAssertNil(after.approval)
         XCTAssertFalse(after.requiresAttention)
     }
     func testStopAndSessionEndClearApproval() {
         let id = UUID()
-        let approved = TerminalAgentBridge.reduce(existing: nil, id: id, event: event(.toolPermissionRequested, requestID: "R1"))
+        let approved = TerminalAgentBridge.reduce(existing: nil, id: id, event: event(.permissionRequested, requestID: "R1"))
         XCTAssertNil(TerminalAgentBridge.reduce(existing: approved, id: id, event: event(.agentStopped)).approval)
         XCTAssertNil(TerminalAgentBridge.reduce(existing: approved, id: id, event: event(.sessionEnded)).approval)
     }
     func testClassifierRules() {
-        XCTAssertTrue(ApprovalClassifier.createsApproval(.toolPermissionRequested))
+        XCTAssertTrue(ApprovalClassifier.createsApproval(.permissionRequested))
+        XCTAssertFalse(ApprovalClassifier.createsApproval(.toolPermissionRequested))
         XCTAssertFalse(ApprovalClassifier.createsApproval(.toolStarted))
         XCTAssertTrue(ApprovalClassifier.clearsApproval(.toolCompleted))
         XCTAssertTrue(ApprovalClassifier.clearsApproval(.agentStopped))
@@ -67,7 +74,7 @@ final class ApprovalClassificationTests: XCTestCase {
 final class PermissionHandlingModeTests: XCTestCase {
     private func perm(mode: AgentPermissionHandlingMode, delay: TimeInterval = 8,
                       now: Date = Date(timeIntervalSince1970: 1000)) -> AgentSession {
-        let e = TerminalAgentEvent(type: .toolPermissionRequested, provider: .claudeCode,
+        let e = TerminalAgentEvent(type: .permissionRequested, provider: .claudeCode,
                                    sessionID: "S", cwd: "/p", timestamp: 1000, requestID: "R1")
         return TerminalAgentBridge.reduce(existing: nil, id: UUID(), event: e,
                                           handlingMode: mode, fallbackDelay: delay, now: now)
@@ -76,9 +83,9 @@ final class PermissionHandlingModeTests: XCTestCase {
     func testTerminalOnlyHasNoFunctionalDecision() {
         XCTAssertFalse(AgentPermissionHandlingMode.terminalOnly.showsFunctionalDecision)
         let s = perm(mode: .terminalOnly)
-        XCTAssertNotNil(s.approval)                     // still surfaced for display
-        XCTAssertFalse(s.requiresAttention)             // but not a functional decision
-        XCTAssertTrue(s.approval?.nativePromptExpected == true)
+        XCTAssertNil(s.approval)
+        XCTAssertFalse(s.requiresAttention)
+        XCTAssertEqual(s.latestSummary, "Respond in Terminal")
     }
     func testNotchOnlyExpectsNoNativePrompt() {
         XCTAssertTrue(AgentPermissionHandlingMode.notchOnly.showsFunctionalDecision)
@@ -106,8 +113,13 @@ final class PermissionHandlingModeTests: XCTestCase {
     func testNoModeAutoApproves() {
         for mode in AgentPermissionHandlingMode.allCases {
             let s = perm(mode: mode)
-            XCTAssertNotEqual(s.status, .running, "\(mode) must not auto-resolve to running")
-            XCTAssertEqual(s.status, .waitingForApproval)
+            if mode == .terminalOnly {
+                XCTAssertEqual(s.status, .running)
+                XCTAssertNil(s.approval)
+            } else {
+                XCTAssertEqual(s.status, .waitingForApproval)
+                XCTAssertNotNil(s.approval)
+            }
         }
     }
     func testTimeoutFailsSafeNeverApproves() {

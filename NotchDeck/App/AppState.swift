@@ -37,14 +37,11 @@ final class AppState: ObservableObject {
     /// Focus Mode: when set, the expanded panel shows this module's full view
     /// instead of the Home dashboard. Focus never pins.
     @Published var focusedModuleID: String?
-    /// Agent Focus Mode.
-    @Published var focusedAgentID: UUID?
     /// Module library overlay visibility.
     @Published var showingModuleLibrary = false
 
     func focusModule(_ id: String) { focusedModuleID = id; showingModuleLibrary = false }
-    func focusAgent(_ id: UUID) { focusedAgentID = id }
-    func clearFocus() { focusedModuleID = nil; focusedAgentID = nil }
+    func clearFocus() { focusedModuleID = nil }
 
     private var machine = NotchStateMachine()
     private let settings: SettingsStore
@@ -77,7 +74,6 @@ final class AppState: ObservableObject {
     private func applyAgentsEnabled(_ enabled: Bool) {
         agentsEnabled = enabled
         guard !enabled else { return }
-        focusedAgentID = nil
         // Do NOT persist `defaultFace` here: writing settings from inside its own
         // change notification re-enters the publisher with a pre-commit value. It
         // is unnecessary anyway — `init` re-normalises a persisted `.agents` to
@@ -133,7 +129,6 @@ final class AppState: ObservableObject {
         // Collapsing returns to Home next time; module STATE is preserved by the
         // services, only the navigation resets.
         focusedModuleID = nil
-        focusedAgentID = nil
         showingModuleLibrary = false
         sync()
     }

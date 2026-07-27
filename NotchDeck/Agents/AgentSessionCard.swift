@@ -12,6 +12,55 @@ struct AgentCardActions {
     var followUp: (() -> Void)?
 }
 
+/// Pure, testable semantic presentation used by both visual labels and
+/// accessibility. It prevents status duplication and provider-name mixups.
+struct AgentCardPresentation: Equatable {
+    let lifecycleLabel: String
+    let statusLine: String
+    let preview: String?
+    let deliveryLabel: String?
+    let terminalNotice: String?
+    let focusAccessibilityLabel: String
+
+    init(session: AgentSession, bucket: AgentBucket) {
+        lifecycleLabel = bucket == .recent ? "Recent" : "Active"
+        let provider = session.appearance.displayName
+        let state: String
+        switch session.approval?.state {
+        case .pending: state = "Permission requested"
+        case .sending: state = "Sending decision"
+        case .sent, .helperExited: state = "Decision sent"
+        case .delivered: state = "Continued"
+        case .deliveryFailed: state = "Delivery failed"
+        case .fellBack: state = "Respond in Terminal"
+        case .expired: state = "Request expired"
+        case .cancelled: state = "Cancelled"
+        case .answered: state = "Answered"
+        case .none: state = session.status.label
+        }
+        statusLine = "\(provider) · \(state)"
+
+        if session.approval != nil {
+            preview = nil
+        } else {
+            let summary = session.latestSummary?.trimmingCharacters(in: .whitespacesAndNewlines)
+            preview = (summary?.isEmpty == false && summary != state) ? summary : nil
+        }
+
+        switch session.approval?.state {
+        case .sending: deliveryLabel = "Sending to \(provider)…"
+        case .sent, .helperExited: deliveryLabel = "Sent to \(provider)"
+        case .delivered: deliveryLabel = "\(provider) continued"
+        case .deliveryFailed: deliveryLabel = "Delivery failed — answer in Terminal"
+        case .expired: deliveryLabel = "Request expired"
+        default: deliveryLabel = nil
+        }
+        terminalNotice = session.terminalTTY == nil ? "Terminal identifier unavailable" : nil
+        let project = session.projectName.isEmpty ? session.title : session.projectName
+        focusAccessibilityLabel = "Focus Terminal for \(project)"
+    }
+}
+
 /// One agent session as a dense horizontal card. A genuine pending approval
 /// (only from a PermissionRequest) expands with Allow/Deny; ordinary running
 /// cards never show decision buttons. Focus Terminal is always visible and is
@@ -21,6 +70,7 @@ struct AgentSessionCard: View {
     var maxPreviewLines: Int = 2
     var showPreview: Bool = true
     var approvalSending: Bool = false
+    var bucket: AgentBucket = .active
     let actions: AgentCardActions
     @State private var hovering = false
 
@@ -30,6 +80,9 @@ struct AgentSessionCard: View {
     }
     private var fellBack: Bool { session.approval?.state == .fellBack }
     private var deliveryState: PendingApproval.ResponseState? { session.approval?.state }
+    private var presentation: AgentCardPresentation {
+        AgentCardPresentation(session: session, bucket: bucket)
+    }
 
     private func statusRow(_ text: String, _ icon: String, _ tint: Color) -> some View {
         HStack(spacing: 6) {
@@ -44,12 +97,19 @@ struct AgentSessionCard: View {
         VStack(alignment: .leading, spacing: 7) {
             headerRow
             if genuineApproval { approvalRow }
-            else if deliveryState == .sending { statusRow("Sending to Claude…", "arrow.up.circle", DesignTokens.Palette.secondaryText) }
-            else if deliveryState == .sent { statusRow("Sent to Claude", "paperplane.fill", DesignTokens.Palette.secondaryText) }
-            else if deliveryState == .delivered { statusRow("Claude continued", "checkmark.circle.fill", DesignTokens.Palette.statusSuccess) }
+            else if deliveryState == .sending { statusRow(presentation.deliveryLabel ?? "Sending…", "arrow.up.circle", DesignTokens.Palette.secondaryText) }
+            else if deliveryState == .sent || deliveryState == .helperExited { statusRow(presentation.deliveryLabel ?? "Sent", "paperplane.fill", DesignTokens.Palette.secondaryText) }
+            else if deliveryState == .delivered { statusRow(presentation.deliveryLabel ?? "Continued", "checkmark.circle.fill", DesignTokens.Palette.statusSuccess) }
             else if deliveryState == .deliveryFailed { statusRow("Delivery failed — answer in Terminal", "exclamationmark.triangle.fill", DesignTokens.Palette.statusFailure) }
             else if deliveryState == .expired { statusRow("Request expired", "clock.badge.xmark", DesignTokens.Palette.tertiaryText) }
             else if fellBack { waitingInTerminalRow }
+            if session.queuedApprovalCount > 0 {
+                Label("\(session.queuedApprovalCount) more permission request\(session.queuedApprovalCount == 1 ? "" : "s") waiting",
+                      systemImage: "list.bullet")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(DesignTokens.Palette.tertiaryText)
+                    .accessibilityLabel("\(session.queuedApprovalCount) additional permission request\(session.queuedApprovalCount == 1 ? "" : "s") waiting")
+            }
         }
         .padding(11)
         .background(hovering ? DesignTokens.Palette.cardFillHover : DesignTokens.Palette.cardFill,
@@ -58,6 +118,7 @@ struct AgentSessionCard: View {
             RoundedRectangle(cornerRadius: DesignTokens.Metrics.cardCornerRadius, style: .continuous)
                 .strokeBorder(borderColor, lineWidth: genuineApproval ? 1.4 : 0.6))
         .onHover { hovering = $0 }
+        .accessibilityElement(children: .contain)
     }
 
     // MARK: Header
@@ -65,34 +126,33 @@ struct AgentSessionCard: View {
     private var headerRow: some View {
         HStack(alignment: .top, spacing: 10) {
             AgentProviderLogo(session: session, size: 34)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(session.projectName.isEmpty ? session.title : session.projectName)
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(DesignTokens.Palette.primaryText).lineLimit(1)
-                    StatusBadge(status: displayStatus)
+                    LifecycleBadge(label: presentation.lifecycleLabel, active: bucket == .active)
                 }
-                Text("\(session.status.label) · \(session.appearance.displayName)")
+                Text(presentation.statusLine)
                     .font(.system(size: 9.5))
                     .foregroundStyle(DesignTokens.Palette.tertiaryText).lineLimit(1)
-                if showPreview, let summary = session.latestSummary, !summary.isEmpty {
+                if showPreview, let summary = presentation.preview {
                     Text(summary)
                         .font(.system(size: 11))
                         .foregroundStyle(DesignTokens.Palette.secondaryText)
                         .lineLimit(maxPreviewLines)
                         .truncationMode(.middle)
                 }
-                if genuineApproval { debugApprovalLabel }
-                debugPresenceLabel
+                if let notice = presentation.terminalNotice {
+                    Label(notice, systemImage: "questionmark.circle")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(DesignTokens.Palette.statusAttention)
+                }
             }
             Spacer(minLength: 6)
             trailing
         }
-    }
-
-    /// Status shown in the badge (reflects the terminal-fallback hand-off).
-    private var displayStatus: AgentSessionStatus {
-        fellBack ? .waitingForInput : session.status
     }
 
     private var trailing: some View {
@@ -111,6 +171,10 @@ struct AgentSessionCard: View {
                 .foregroundStyle(DesignTokens.Palette.primaryText)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(presentation.focusAccessibilityLabel)
+        .accessibilityHint(session.terminalTTY == nil
+            ? "Terminal identifier unavailable"
+            : "Selects the existing matching Terminal tab")
         .help(session.terminalTTY != nil
               ? "Bring the exact terminal tab (\(session.terminalTTY!)) to the front"
               : "Exact terminal association unavailable")
@@ -125,26 +189,33 @@ struct AgentSessionCard: View {
                 if let followUp = actions.followUp { Divider(); Button("Send follow-up…", action: followUp) }
             } label: { Image(systemName: "ellipsis").font(.system(size: 11)) }
                 .menuStyle(.borderlessButton).frame(width: 20).fixedSize()
+                .accessibilityLabel("More actions for \(session.projectName.isEmpty ? session.title : session.projectName)")
         }
     }
 
     // MARK: Approval
 
     private var approvalRow: some View {
-        // DEBUG safety: an approval card must originate from the authoritative
-        // PreToolUse decision hook (the channel the CLI actually consumes).
-        assert(session.approval?.rawEventName == "PreToolUse",
-               "Approval card without a PreToolUse-backed PendingApproval")
+        assert(session.approval?.rawEventName == "PermissionRequest",
+               "Approval card without a PermissionRequest-backed transaction")
         return VStack(alignment: .leading, spacing: 6) {
-            if let summary = session.approval?.summary, !summary.isEmpty {
-                Text(summary).font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(DesignTokens.Palette.primaryText).lineLimit(3)
+            if let tool = session.approval?.toolName, !tool.isEmpty {
+                Text("Tool: \(tool)").font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(DesignTokens.Palette.primaryText).lineLimit(1)
             }
             HStack(spacing: 8) {
                 if let deadline = session.approval?.fallbackDeadline {
-                    Label("Terminal prompt in \(secondsRemaining(deadline))s", systemImage: "timer")
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Label(
+                            "Terminal prompt in \(secondsRemaining(deadline, now: context.date))s",
+                            systemImage: "timer"
+                        )
                         .font(.system(size: 9.5))
                         .foregroundStyle(DesignTokens.Palette.statusAttention)
+                        .accessibilityLabel(
+                            "Native Terminal prompt in \(secondsRemaining(deadline, now: context.date)) seconds"
+                        )
+                    }
                 }
                 Spacer(minLength: 0)
                 if approvalSending {
@@ -152,8 +223,10 @@ struct AgentSessionCard: View {
                         .font(.system(size: 10.5, weight: .semibold))
                         .foregroundStyle(DesignTokens.Palette.secondaryText)
                 } else {
-                    decisionButton("Deny", "xmark", DesignTokens.Palette.statusFailure, actions.deny)
-                    decisionButton("Allow", "checkmark", DesignTokens.Palette.statusSuccess, actions.approve)
+                    decisionButton("Deny", "xmark", DesignTokens.Palette.statusFailure,
+                                   accessibilityVerb: "Deny", actions.deny)
+                    decisionButton("Allow", "checkmark", DesignTokens.Palette.statusSuccess,
+                                   accessibilityVerb: "Allow", actions.approve)
                 }
             }
         }
@@ -168,28 +241,8 @@ struct AgentSessionCard: View {
         .foregroundStyle(DesignTokens.Palette.statusAttention)
     }
 
-    private var debugApprovalLabel: some View {
-        #if DEBUG
-        return Text("PreToolUse · req \(String((session.approval?.requestID ?? "").prefix(6)))")
-            .font(.system(size: 8, design: .monospaced))
-            .foregroundStyle(DesignTokens.Palette.tertiaryText)
-        #else
-        return EmptyView()
-        #endif
-    }
-
-    /// DEBUG-only presence/debounce readout (miss counter toward Recent).
-    private var debugPresenceLabel: some View {
-        #if DEBUG
-        return Text("presence \(session.terminalPresence.rawValue) · miss \(session.terminalMissCount)/\(TerminalPresenceDebounce.missThreshold)")
-            .font(.system(size: 8, design: .monospaced))
-            .foregroundStyle(DesignTokens.Palette.tertiaryText)
-        #else
-        return EmptyView()
-        #endif
-    }
-
     private func decisionButton(_ title: String, _ icon: String, _ tint: Color,
+                                accessibilityVerb: String,
                                 _ action: (() -> Void)?) -> some View {
         Button(action: { action?() }) {
             Label(title, systemImage: icon)
@@ -201,10 +254,13 @@ struct AgentSessionCard: View {
         }
         .buttonStyle(.plain)
         .disabled(action == nil || approvalSending)
+        .accessibilityLabel(
+            "\(accessibilityVerb) \(session.appearance.displayName) permission for \(session.projectName.isEmpty ? session.title : session.projectName)"
+        )
     }
 
-    private func secondsRemaining(_ deadline: Date) -> Int {
-        max(0, Int(deadline.timeIntervalSinceNow.rounded(.up)))
+    private func secondsRemaining(_ deadline: Date, now: Date) -> Int {
+        max(0, Int(deadline.timeIntervalSince(now).rounded(.up)))
     }
 
     private var borderColor: Color {
@@ -213,15 +269,18 @@ struct AgentSessionCard: View {
     }
 }
 
-/// Colored status chip.
-struct StatusBadge: View {
-    let status: AgentSessionStatus
+/// Lifecycle chip. Activity is spoken once in the semantic provider line.
+struct LifecycleBadge: View {
+    let label: String
+    let active: Bool
     var body: some View {
-        Text(status.label)
+        Text(label)
             .font(.system(size: 9.5, weight: .semibold))
             .padding(.horizontal, 7).padding(.vertical, 2.5)
-            .background(status.tint.opacity(0.18), in: Capsule())
-            .foregroundStyle(status.tint)
+            .background((active ? DesignTokens.Palette.statusRunning
+                                : DesignTokens.Palette.statusIdle).opacity(0.18), in: Capsule())
+            .foregroundStyle(active ? DesignTokens.Palette.statusRunning
+                                    : DesignTokens.Palette.statusIdle)
     }
 }
 

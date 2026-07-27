@@ -164,7 +164,7 @@ final class AgentsModuleTests: XCTestCase {
     // MARK: Approval safety (items 23–24) — never auto-approve on a request
 
     func testPermissionRequestNeverAutoApproves() {
-        let event = TerminalAgentEvent(type: .toolPermissionRequested, provider: .claudeCode,
+        let event = TerminalAgentEvent(type: .permissionRequested, provider: .claudeCode,
                                        sessionID: "s1", timestamp: 0, requestID: "r1")
         let s = TerminalAgentBridge.reduce(existing: nil, id: UUID(), event: event)
         XCTAssertEqual(s.status, .waitingForApproval)

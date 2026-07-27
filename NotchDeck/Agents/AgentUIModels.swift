@@ -92,6 +92,21 @@ enum AgentActivityState: String, Codable, Equatable {
 enum AgentBucket: Equatable { case active, recent, hidden }
 
 enum AgentSessionFilter {
+    static func bucket(_ session: AgentSession) -> AgentBucket {
+        switch session.processPresence {
+        case .running: return .active
+        case .ended: return .recent
+        case .none:
+            return bucket(
+                presence: session.terminalPresence,
+                status: session.status,
+                isBridgeConnected: session.isBridgeConnected,
+                isManaged: session.isManaged,
+                hasExternalWindow: session.externalBundleID != nil
+            )
+        }
+    }
+
     static func isActiveStatus(_ s: AgentSessionStatus) -> Bool {
         switch s {
         case .starting, .running, .waitingForInput, .waitingForApproval, .idle: return true
@@ -176,12 +191,14 @@ enum TerminalSessionLookupResult: Equatable {
 /// "no longer available"; every other failure gets a precise, non-alarming
 /// reason and the session stays Active.
 enum TerminalFocusFeedback {
-    static let unavailable = TerminalFocus.unavailableMessage
-    static let permissionDenied = "NotchDeck does not have permission to control Terminal"
-    static let verifyFailed = "Unable to verify the Terminal session"
-    static let notLinked = "This session has not yet been linked to its Terminal tab"
-    static let temporary = "Terminal session verification temporarily unavailable"
-    static let unsupported = "Focusing is only supported for the Apple Terminal window"
+    static let unavailable = "Original terminal tab is no longer open"
+    static let permissionDenied = "Terminal Automation permission required"
+    static let verifyFailed = "Terminal query failed"
+    static let notLinked = "Terminal identifier unavailable"
+    static let temporary = unavailable
+    static let unsupported = "Terminal application not supported"
+    static let notRunning = "Terminal.app is not running"
+    static let focused = "Terminal tab focused"
 
     /// Returns nil when the tab was found (no message needed).
     static func message(for result: TerminalSessionLookupResult,
@@ -192,10 +209,9 @@ enum TerminalFocusFeedback {
         case .missingSessionTTY: return notLinked
         case .enumerationFailed: return verifyFailed
         case .unsupportedTerminal: return unsupported
-        case .terminalNotRunning: return unavailable
+        case .terminalNotRunning: return notRunning
         case .ttyNotFound:
-            // Only a CONFIRMED-missing session is truly gone; otherwise transient.
-            return presence == .missing ? unavailable : temporary
+            return unavailable
         }
     }
 }
@@ -236,21 +252,23 @@ enum TerminalFocus {
     static func focusTTYScript(tty: String) -> String {
         let target = normalizeTTY(tty)
         return """
-        tell application "Terminal"
-            repeat with w in windows
-                repeat with t in tabs of w
-                    try
-                        if (tty of t) is "\(target)" then
-                            set selected of t to true
-                            set frontmost of w to true
-                            if miniaturized of w then set miniaturized of w to false
-                            activate
-                            return "ok"
-                        end if
-                    end try
+        with timeout of 5 seconds
+            tell application "Terminal"
+                repeat with w in windows
+                    repeat with t in tabs of w
+                        try
+                            if (tty of t) is "\(target)" then
+                                set selected of t to true
+                                set frontmost of w to true
+                                if miniaturized of w then set miniaturized of w to false
+                                activate
+                                return "ok"
+                            end if
+                        end try
+                    end repeat
                 end repeat
-            end repeat
-        end tell
+            end tell
+        end timeout
         return "notfound"
         """
     }
@@ -450,11 +468,8 @@ enum TerminalFallbackDelay: String, Codable, CaseIterable, Identifiable {
 /// Classifies incoming bridge events strictly: only a genuine PermissionRequest
 /// creates an approval. PreToolUse (toolStarted) is ONLY activity.
 enum ApprovalClassifier {
-    /// Only the PreToolUse decision hook (`toolPermissionRequested`) creates an
-    /// approval — it is the channel the CLI actually honours. PermissionRequest
-    /// is an observer and PreToolUse-as-activity (`toolStarted`) is activity only.
     static func createsApproval(_ type: TerminalAgentEventType) -> Bool {
-        type == .toolPermissionRequested
+        type == .permissionRequested
     }
     /// Events that clear/resolve a live approval.
     static func clearsApproval(_ type: TerminalAgentEventType) -> Bool {
@@ -465,8 +480,8 @@ enum ApprovalClassifier {
     }
     static func reason(_ type: TerminalAgentEventType) -> String {
         switch type {
-        case .toolPermissionRequested: return "PreToolUse → authoritative decision, creates approval"
-        case .permissionRequested: return "PermissionRequest → observer only, never a duplicate approval"
+        case .toolPermissionRequested: return "Legacy PreToolUse decision → released to native flow"
+        case .permissionRequested: return "PermissionRequest → correlated human decision"
         case .toolStarted: return "PreToolUse activity → activity only, never approval"
         case .toolCompleted: return "PostToolUse → tool completed, clears approval"
         case .agentStopped: return "Stop → turn finished, clears approval"
@@ -488,6 +503,7 @@ struct PendingApproval: Equatable, Codable {
         case pending          // "Waiting for decision" — awaiting the user
         case sending          // "Sending to Claude" — decision being written to the helper
         case sent             // "Sent to Claude" — response written+flushed, provider not yet confirmed
+        case helperExited     // provider-facing stdout closed; provider acceptance not yet observed
         case delivered        // "Claude continued" — provider progression observed
         case deliveryFailed   // "Delivery failed" — helper gone / write failed
         case fellBack         // "Released to Terminal" — hybrid deadline → native prompt
@@ -498,7 +514,10 @@ struct PendingApproval: Equatable, Codable {
     }
     var provider: AgentProviderKind
     var sessionID: String
+    /// NotchDeck transaction identity, unique per live helper invocation.
     var requestID: String
+    /// Provider-native request key retained separately. It never owns a socket.
+    var providerRequestID: String? = nil
     var toolUseID: String?
     var turnID: String?
     /// Exact raw hook event name that produced this approval.
@@ -632,6 +651,13 @@ struct AgentCompactModel: Equatable {
 /// by PID / TTY / project-title association.
 enum AgentSessionMerge {
     static func externalDuplicatesConnected(external: AgentSession, connected: AgentSession) -> Bool {
+        let externalVendor = external.vendor
+        let authoritativeVendor = connected.vendor
+        if externalVendor != .unknown,
+           authoritativeVendor != .unknown,
+           externalVendor != authoritativeVendor {
+            return false
+        }
         if let ep = external.pid, let cp = connected.pid, ep == cp { return true }
         if let et = external.terminalTTY, let ct = connected.terminalTTY, !et.isEmpty, et == ct { return true }
         if let title = external.externalWindowTitle, !connected.projectName.isEmpty,

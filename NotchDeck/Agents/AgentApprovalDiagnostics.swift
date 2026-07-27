@@ -47,6 +47,47 @@ final class AgentApprovalDiagnostics: @unchecked Sendable {
         #endif
     }
 
+    static func recordProcess(snapshot: AgentProcessSnapshot, session: AgentSession?) {
+        #if DEBUG
+        let identity = snapshot.identity
+        let ancestry = MacProcessAncestry.identities(from: identity.pid)
+            .dropFirst()
+            .prefix(16)
+            .map { "\($0.pid)@\($0.startSeconds).\($0.startMicroseconds)" }
+            .joined(separator: ">")
+        let appSession = session.map { abbrev($0.id.uuidString) } ?? "unmatched"
+        let providerSession = session?.providerSessionID.map(abbrev) ?? "—"
+        shared.append(
+            "process pid=\(identity.pid) start=\(identity.startSeconds).\(identity.startMicroseconds) "
+                + "exe=\(snapshot.executableBasename) classification=\(snapshot.classification.rawValue) "
+                + "provider=\(snapshot.provider.rawValue) ppid=\(snapshot.parentPID) "
+                + "ancestry=\(ancestry.isEmpty ? "—" : ancestry) "
+                + "tty=\(snapshot.controllingTTY?.canonicalPath ?? "—") "
+                + "ttySource=\(snapshot.controllingTTY?.source.rawValue ?? "—") "
+                + "discovered=\(snapshot.discoveredAt.timeIntervalSince1970) "
+                + "appSession=\(appSession) providerSession=\(providerSession)"
+        )
+        #endif
+    }
+
+    static func recordHookDecodeFailure() {
+        #if DEBUG
+        shared.append("hook decoded=false payload=redacted")
+        #endif
+    }
+
+    static func recordHook(event: TerminalAgentEvent, decoded: Bool,
+                           correlation: AgentHookCorrelationConfidence?) {
+        #if DEBUG
+        shared.append(
+            "hook event=\(event.type.rawValue) decoded=\(decoded) provider=\(event.provider.rawValue) "
+                + "helperPid=\(event.pid.map(String.init) ?? "—") "
+                + "providerSession=\(abbrev(event.sessionID)) "
+                + "correlation=\(correlation?.rawValue ?? "none")"
+        )
+        #endif
+    }
+
     /// A copy-ready snapshot for the Debug "Copy Diagnostics" action.
     func snapshot() -> String {
         #if DEBUG
