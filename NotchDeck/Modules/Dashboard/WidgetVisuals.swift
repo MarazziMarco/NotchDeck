@@ -263,6 +263,7 @@ struct FileShelfWidget: View {
         .padding(8)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onDrop(of: [.fileURL], isTargeted: $targeted) { providers in
+            if ShelfDrag.isInternal(providers) { return true }
             for p in providers where p.canLoadObject(ofClass: URL.self) {
                 _ = p.loadObject(ofClass: URL.self) { url, _ in
                     if let url { DispatchQueue.main.async { store.add(urls: [url]) } }

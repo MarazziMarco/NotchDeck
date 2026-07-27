@@ -70,11 +70,40 @@ final class HookCommandQuotingTests: XCTestCase {
     }
 }
 
+/// Deterministic media boundary for tests — never launches osascript / Music.app.
+final class FakeNowPlayingProvider: NowPlayingProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _count = 0
+    var snapshotCount: Int { lock.lock(); defer { lock.unlock() }; return _count }
+    func snapshot() -> NowPlayingSnapshot {
+        lock.lock(); _count += 1; lock.unlock(); return .empty
+    }
+    func playPause(currentApp: String?) {}
+    func next(currentApp: String?) {}
+    func previous(currentApp: String?) {}
+}
+
 @MainActor
 final class SharedStoreTests: XCTestCase {
     func testCoordinatorAndEnvironmentShareOneStore() {
-        let env = AppEnvironment(settings: SettingsStore.inMemory())
+        // Uses the fake media boundary → no Music.app / osascript / Automation prompt.
+        let env = AppEnvironment(settings: SettingsStore.inMemory(), mediaProvider: FakeNowPlayingProvider())
         XCTAssertTrue(env.agentStore === env.agents.store)   // same instance the bridge updates
+    }
+
+    func testTestEnvironmentUsesFakeMediaNoExternalProcess() {
+        let fake = FakeNowPlayingProvider()
+        let env = AppEnvironment(settings: SettingsStore.inMemory(), mediaProvider: fake)
+        // Constructed + configured (which starts Now Playing) with no external
+        // process launch; the fake yields an empty, deterministic state.
+        XCTAssertNil(env.nowPlaying.track)
+        XCTAssertFalse(env.nowPlaying.providerAvailable)
+        // Prove the fake boundary was actually used (not the AppleScript provider).
+        let exp = expectation(description: "fake polled")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            if fake.snapshotCount >= 1 { exp.fulfill() }
+        }
+        wait(for: [exp], timeout: 2)
     }
 
     func testImmediatePublishedUpdateOnUpsert() {

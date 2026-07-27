@@ -152,10 +152,12 @@ struct EditorialNowPlaying: View {
 struct EditorialFileShelf: View {
     @EnvironmentObject private var store: FileShelfStore
     @State private var targeted = false
+    @State private var selection = ShelfSelection()
+
+    private var order: [UUID] { store.items.map(\.id) }
 
     var body: some View {
         ZStack {
-            // Recessed tray with a bottom lip + inward shadow.
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.black.opacity(0.4))
                 .overlay(
@@ -169,7 +171,12 @@ struct EditorialFileShelf: View {
             }
             content
         }
+        .contentShape(Rectangle())
+        .onTapGesture { selection.clear() }        // clicking empty space clears selection
         .onDrop(of: [.fileURL], isTargeted: $targeted) { providers in
+            // A drop that came FROM the shelf itself is a safe no-op — never a
+            // re-import (which previously deleted the file).
+            if ShelfDrag.isInternal(providers) { return true }
             for p in providers where p.canLoadObject(ofClass: URL.self) {
                 _ = p.loadObject(ofClass: URL.self) { url, _ in
                     if let url { DispatchQueue.main.async { store.add(urls: [url]) } }
@@ -177,68 +184,127 @@ struct EditorialFileShelf: View {
             }
             return true
         }
+        .onChange(of: store.items.count) { _, _ in selection.prune(validIDs: Set(order)) }
     }
 
     @ViewBuilder private var content: some View {
         if store.items.isEmpty {
-            // Empty state fills the module and stays centred (the whole tray is the
-            // drop target).
             VStack(spacing: 8) {
                 Image(systemName: "tray.and.arrow.down.fill").font(.system(size: 30, weight: .light))
                     .foregroundStyle(DesignTokens.Palette.secondaryText)
                 Text("Drop files").font(.system(size: 11)).foregroundStyle(DesignTokens.Palette.tertiaryText)
             }
         } else {
-            // Populated: compact top-leading adaptive icon grid — each file is ONE
-            // compact cell, cells fill horizontally then wrap. Never a full-width
-            // row. Unused space stays outside the cells.
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: FileShelfGrid.cellMinWidth,
-                                                       maximum: FileShelfGrid.cellMaxWidth),
-                                             spacing: 12, alignment: .top)],
-                          alignment: .leading, spacing: 12) {
-                    ForEach(store.items) { item in FileShelfGridCell(item: item) }
+            VStack(spacing: 2) {
+                if selection.count > 1 {
+                    Text("\(selection.count) selected").font(.system(size: 9))
+                        .foregroundStyle(DesignTokens.Palette.secondaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 12).padding(.top, 4)
                 }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: FileShelfGrid.cellMinWidth,
+                                                           maximum: FileShelfGrid.cellMaxWidth),
+                                                 spacing: 12, alignment: .top)],
+                              alignment: .leading, spacing: 12) {
+                        ForEach(store.items) { item in
+                            FileShelfGridCell(item: item, selection: $selection, order: order)
+                        }
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 }
 
-/// One compact File Shelf cell: icon/thumbnail + two-line centred filename. Fixed
-/// footprint — never expands to the module width/height.
+/// One compact File Shelf cell: icon/thumbnail + two-line centred filename with
+/// native-style multi-selection and group drag-out. Fixed footprint.
 struct FileShelfGridCell: View {
     let item: FileShelfItem
+    @Binding var selection: ShelfSelection
+    let order: [UUID]
     @EnvironmentObject private var store: FileShelfStore
     @State private var hovering = false
+
+    private var isSelected: Bool { selection.contains(item.id) }
+    /// The group to drag/act on: the whole selection if this item is selected,
+    /// otherwise just this item.
+    private var groupIDs: [UUID] {
+        isSelected ? order.filter { selection.contains($0) } : [item.id]
+    }
 
     var body: some View {
         VStack(spacing: 4) {
             Image(nsImage: item.icon).resizable().aspectRatio(contentMode: .fit)
                 .frame(width: FileShelfGrid.iconSize, height: FileShelfGrid.iconSize)
                 .opacity(item.isMissing ? 0.4 : 1)
-                .modifier(DragOutModifier(item: item))
+                .overlay { if item.resolveURL() != nil { groupDragOverlay } }
             Text(item.name).font(.system(size: 9.5)).lineLimit(2)
                 .multilineTextAlignment(.center).truncationMode(.middle)
                 .foregroundStyle(DesignTokens.Palette.primaryText)
         }
         .frame(width: FileShelfGrid.cellMinWidth - 6, height: FileShelfGrid.cellHeight)
         .padding(4)
-        .background(hovering ? DesignTokens.Palette.cardFillHover : .clear,
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(cellBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(isSelected ? DesignTokens.Palette.statusRunning : .clear, lineWidth: 1.5))
+        .contentShape(Rectangle())
         .onHover { hovering = $0 }
+        .onTapGesture { handleClick() }
         .help(item.path)
-        .contextMenu {
-            Button("Open") { if let u = item.resolveURL() { NSWorkspace.shared.open(u) } }
-            Button("Reveal in Finder") { if let u = item.resolveURL() { NSWorkspace.shared.activateFileViewerSelecting([u]) } }
-            Button("Quick Look") { if let u = item.resolveURL() { QuickLookPreview.shared.preview(url: u) } }
-            Divider()
-            if item.intakeMode == .keepOriginalReference {
-                Button("Remove from Shelf", role: .destructive) { store.remove(item) }
-            } else {
-                Button("Move to Trash", role: .destructive) { store.moveToTrash(item) }
+        .accessibilityLabel(accessibilityLabel)
+        .contextMenu { contextMenu }
+    }
+
+    private var cellBackground: Color {
+        if isSelected { return DesignTokens.Palette.statusRunning.opacity(0.16) }
+        return hovering ? DesignTokens.Palette.cardFillHover : .clear
+    }
+
+    /// Group-aware drag: carries all selected URLs (or just this one).
+    private var groupDragOverlay: some View {
+        let ids = groupIDs
+        let urls = store.urls(for: ids)
+        return FileDragSource(urls: urls, icon: item.icon, identifiers: ids.map(\.uuidString)) { op in
+            store.completeGroupDrag(items: ids, operation: op)
+        }
+    }
+
+    private func handleClick() {
+        let mods = NSEvent.modifierFlags
+        if mods.contains(.command) { selection.toggle(item.id) }
+        else if mods.contains(.shift) { selection.range(to: item.id, order: order) }
+        else { selection.click(item.id) }
+    }
+
+    private var accessibilityLabel: Text {
+        let pos = (order.firstIndex(of: item.id) ?? 0) + 1
+        let state = isSelected ? "selected, \(pos) of \(order.count)" : "\(pos) of \(order.count)"
+        return Text("\(item.name), \(state)")
+    }
+
+    @ViewBuilder private var contextMenu: some View {
+        // Right-clicking an unselected item targets only it.
+        let ids = isSelected && selection.count > 1 ? groupIDs : [item.id]
+        let n = ids.count
+        let suffix = n > 1 ? "\(n) Items" : "Item"
+        Button(n > 1 ? "Open \(suffix)" : "Open") {
+            for u in store.urls(for: ids) { NSWorkspace.shared.open(u) }
+        }
+        Button("Reveal \(n > 1 ? "\(n) Items " : "")in Finder") {
+            NSWorkspace.shared.activateFileViewerSelecting(store.urls(for: ids))
+        }
+        Button("Quick Look") { if let u = item.resolveURL() { QuickLookPreview.shared.preview(url: u) } }
+        Divider()
+        if item.intakeMode == .keepOriginalReference {
+            Button("Remove \(n > 1 ? "\(n) Items " : "")from Shelf", role: .destructive) {
+                store.removeReferences(ids)
+            }
+        } else {
+            Button("Move \(n > 1 ? "\(n) Items " : "")to Trash", role: .destructive) {
+                store.moveSelectionToTrash(ids)
             }
         }
     }

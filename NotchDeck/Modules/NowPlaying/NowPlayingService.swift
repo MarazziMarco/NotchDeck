@@ -26,11 +26,12 @@ final class NowPlayingService: ObservableObject, LiveActivitySource {
 
     private var timer: Timer?
     private let queue = DispatchQueue(label: "com.notchdeck.nowplaying")
+    /// The media boundary. Injected so tests never touch osascript / Music.app.
+    private let provider: NowPlayingProviding
 
-    private static let players: [(bundleID: String, app: String)] = [
-        ("com.spotify.client", "Spotify"),
-        ("com.apple.Music", "Music"),
-    ]
+    init(provider: NowPlayingProviding = AppleScriptNowPlayingProvider()) {
+        self.provider = provider
+    }
 
     func start() {
         guard timer == nil else { return }
@@ -45,94 +46,26 @@ final class NowPlayingService: ObservableObject, LiveActivitySource {
 
     func stop() { timer?.invalidate(); timer = nil }
 
-    private func runningPlayers() -> [(bundleID: String, app: String)] {
-        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
-        return Self.players.filter { running.contains($0.bundleID) }
-    }
-
     func poll() {
-        let players = runningPlayers()
-        providerAvailable = !players.isEmpty
-        guard !players.isEmpty else { track = nil; return }
-        queue.async { [weak self] in
+        queue.async { [weak self, provider] in
             guard let self else { return }
-            var found: Track?
-            for player in players {
-                if let t = Self.query(app: player.app), t.isPlaying {
-                    found = t; break
-                } else if let t = Self.query(app: player.app), found == nil {
-                    found = t
-                }
+            let snap = provider.snapshot()
+            Task { @MainActor in
+                self.track = snap.track
+                self.providerAvailable = snap.providerAvailable
+                self.artworkURL = snap.artworkURL
             }
-            let art = found.flatMap { Self.artwork(app: $0.app) }
-            Task { @MainActor in self.track = found; self.artworkURL = art }
         }
     }
 
-    // MARK: AppleScript
-
-    nonisolated private static func query(app: String) -> Track? {
-        let script = """
-        tell application "\(app)"
-            if it is running then
-                set st to (player state as text)
-                set t to name of current track
-                set a to artist of current track
-                return st & "||" & t & "||" & a
-            end if
-        end tell
-        """
-        guard let out = runOSA(script) else { return nil }
-        let parts = out.components(separatedBy: "||")
-        guard parts.count == 3 else { return nil }
-        let playing = parts[0].lowercased().contains("playing")
-        return Track(title: parts[1], artist: parts[2], isPlaying: playing, app: app)
-    }
-
-    /// Control commands — no-ops if unsupported.
+    /// Control commands — delegated to the provider (no-ops in the fake).
     func playPause() {
-        if track == nil {
-            // Nothing playing yet: try to start Apple Music (launches it if needed).
-            queue.async {
-                _ = Self.runOSA("tell application \"Music\" to play")
-                Task { @MainActor in self.poll() }
-            }
-            return
-        }
-        runControl("playpause")
+        let app = track?.app
+        queue.async { [provider] in provider.playPause(currentApp: app) }
+        if track == nil { poll() }
     }
-    func next() { runControl("next track") }
-    func previous() { runControl("previous track") }
-
-    /// Spotify exposes an artwork URL; Music does not via public AppleScript.
-    nonisolated static func artwork(app: String) -> URL? {
-        guard app == "Spotify" else { return nil }
-        guard let s = runOSA("tell application \"Spotify\" to return artwork url of current track"),
-              let url = URL(string: s.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
-        return url
-    }
-
-    private func runControl(_ command: String) {
-        guard let app = track?.app else { return }
-        queue.async { _ = Self.runOSA("tell application \"\(app)\" to \(command)") }
-    }
-
-    nonisolated private static func runOSA(_ script: String) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-        do {
-            try process.run()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return nil }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let s = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return (s?.isEmpty == false) ? s : nil
-        } catch { return nil }
-    }
+    func next() { let app = track?.app; queue.async { [provider] in provider.next(currentApp: app) } }
+    func previous() { let app = track?.app; queue.async { [provider] in provider.previous(currentApp: app) } }
 
     // MARK: LiveActivitySource
 

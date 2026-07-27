@@ -34,7 +34,11 @@ final class AppEnvironment: ObservableObject {
     /// Set by AppDelegate; used by secondary windows to prepare the notch.
     weak var interaction: NotchInteractionCoordinator?
 
-    init(settings: SettingsStore = SettingsStore()) {
+    /// - mediaProvider: the Now Playing boundary. Production uses AppleScript;
+    ///   tests inject a fake so constructing the environment never launches
+    ///   osascript / Music.app or triggers an Automation prompt.
+    init(settings: SettingsStore = SettingsStore(),
+         mediaProvider: NowPlayingProviding = AppleScriptNowPlayingProvider()) {
         self.settings = settings
         self.appState = AppState(settings: settings)
         self.clipboard = ClipboardService(maxItems: settings.settings.clipboardMaxItems)
@@ -57,7 +61,7 @@ final class AppEnvironment: ObservableObject {
         self.terminalStats = stats
         self.terminalBridge = TerminalAgentBridge(store: store, stats: stats)
         self.quickNote = QuickNoteService()
-        self.nowPlaying = NowPlayingService()
+        self.nowPlaying = NowPlayingService(provider: mediaProvider)
         self.battery = BatteryService()
         self.downloads = DownloadsService()
         self.screenshot = ScreenshotService()

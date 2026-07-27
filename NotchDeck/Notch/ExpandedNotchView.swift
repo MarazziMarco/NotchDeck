@@ -94,6 +94,8 @@ struct ExpandedNotchView: View {
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        // A drag that started inside the File Shelf must not be re-imported.
+        if ShelfDrag.isInternal(providers) { appState.dragInProgress = false; return true }
         var urls: [URL] = []
         let group = DispatchGroup()
         for provider in providers where provider.canLoadObject(ofClass: URL.self) {

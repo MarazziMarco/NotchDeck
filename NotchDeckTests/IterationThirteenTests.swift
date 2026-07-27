@@ -132,19 +132,23 @@ final class FileShelfStoreTests: XCTestCase {
     }
 
     func testSuccessfulMoveDragClearsEntry() throws {
+        // Transactional rule: .move removes the entry only after the staged file
+        // has actually left the shelf (the OS moved it out).
         let s = store(.moveIntoShelf)
         s.add(urls: [try makeFile("e.txt")])
+        try FileManager.default.removeItem(at: URL(fileURLWithPath: s.items[0].stagedPath!))  // OS moved it
         s.completeDrag(item: s.items[0], operation: .move)
         XCTAssertTrue(s.items.isEmpty)
     }
 
-    func testCopyDragCompletesMoveSemantics() throws {
+    func testCopyKeepsShelfItem() throws {
+        // New spec: a COPY drag-out keeps the shelf item and its staged file.
         let s = store(.moveIntoShelf)
         s.add(urls: [try makeFile("f.txt")])
         let staged = s.items[0].stagedPath!
-        s.completeDrag(item: s.items[0], operation: .copy)       // confirmed copy
-        XCTAssertTrue(s.items.isEmpty)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: staged)) // staged source removed
+        s.completeDrag(item: s.items[0], operation: .copy)
+        XCTAssertEqual(s.items.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged))   // staged source kept
     }
 
     func testReferenceRemoveAfterSuccessfulDrag() throws {
@@ -170,7 +174,9 @@ final class FileShelfStoreTests: XCTestCase {
         s.add(urls: [try makeFile("i1.txt"), try makeFile("i2.txt")])
         XCTAssertEqual(s.items.count, 2)
         let first = s.items[0]
-        s.completeDrag(item: first, operation: .move)            // one succeeds
+        // Simulate the OS moving only the first item's staged file out.
+        try FileManager.default.removeItem(at: URL(fileURLWithPath: first.stagedPath!))
+        s.completeDrag(item: first, operation: .move)            // one succeeds (file gone)
         s.completeDrag(item: s.items[0], operation: [])          // other cancelled
         XCTAssertEqual(s.items.count, 1)
         XCTAssertNotEqual(s.items[0].id, first.id)
