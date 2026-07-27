@@ -28,6 +28,17 @@ enum HookInstaller {
     /// Marker embedded in every command NotchDeck adds, for safe removal.
     static let marker = "notchdeck-agent-hook"
 
+    /// Managed hook/helper protocol version. BUMP whenever the helper's provider
+    /// response schema or the timeout constants change, so `configIsUpToDate`
+    /// returns false for an older installation and the integration UI prompts
+    /// Reinstall Hooks (replacing only NotchDeck-managed entries; user hooks and
+    /// backups are preserved).
+    ///
+    /// v2: PermissionRequest response corrected to the provider-valid
+    /// `hookSpecificOutput.permissionDecision` schema (was `decision:{behavior}`).
+    static let managedHookVersion = 2
+    static let managedVersionKey = "notchdeckHookVersion"
+
     // MARK: Helper install
 
     static var installedHelperURL: URL {
@@ -147,7 +158,9 @@ enum HookInstaller {
         let managed = entries.filter { containsMarker($0) }
         guard managed.count == 1, let inner = (managed[0]["hooks"] as? [[String: Any]])?.first else { return false }
         if inner["async"] != nil { return false }
-        return (inner["timeout"] as? Int) == HookTimeouts.claudeHookTimeoutSeconds
+        guard (inner["timeout"] as? Int) == HookTimeouts.claudeHookTimeoutSeconds else { return false }
+        // A stale response-schema/timeout install lacks the current version marker.
+        return (inner[managedVersionKey] as? Int) == managedHookVersion
     }
 
     /// True when NotchDeck hooks are installed but STALE (wrong timeout/schema or
@@ -204,7 +217,8 @@ enum HookInstaller {
             let cmd = command(helper: helper, provider: provider, event: spec.event)
             // PermissionRequest must be SYNCHRONOUS: no `async`, and a timeout
             // longer than the app's 8s UI fallback so the user has time to choose.
-            var hookDict: [String: Any] = ["type": "command", "command": cmd, managedKey: true]
+            var hookDict: [String: Any] = ["type": "command", "command": cmd, managedKey: true,
+                                           managedVersionKey: managedHookVersion]
             if spec.event == .permissionRequested { hookDict["timeout"] = HookTimeouts.claudeHookTimeoutSeconds }
             var entry: [String: Any] = ["hooks": [hookDict], managedKey: true]
             if spec.matcher { entry["matcher"] = "*" }

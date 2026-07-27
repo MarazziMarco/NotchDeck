@@ -220,7 +220,15 @@ final class AgentCoordinator: ObservableObject {
         }
 
         approvalInFlight.insert(session.id)
-        store.update(id: session.id) { $0.approval?.state = .sending }
+        // DELIVERING: record the decision and disable further interaction, but do
+        // NOT show a success state yet. "Approved" is applied ONLY when the helper
+        // acknowledges emitting the provider response (bridge → .decisionDelivered).
+        store.update(id: session.id) {
+            $0.approval?.state = .sending
+            $0.approval?.decidedAllow = allow
+        }
+        AgentApprovalDiagnostics.record(session: session, requestID: rid,
+                                        transition: "userDecided\(allow ? "Allow" : "Deny") → delivering")
 
         let delivered = await terminalBridge?.respond(
             requestID: rid, allow: allow, message: allow ? nil : "Denied in NotchDeck") ?? false
@@ -228,22 +236,22 @@ final class AgentCoordinator: ObservableObject {
 
         if !delivered {
             // The helper was already gone (timed out / disconnected) → not delivered.
+            // Do NOT auto-approve or fake success: show a truthful delivery failure.
             store.update(id: session.id) { $0.approval?.state = .deliveryFailed }
+            AgentApprovalDiagnostics.record(session: session, requestID: rid,
+                                            transition: "delivering → deliveryFailed (helper gone)")
             return
         }
-        // Reflect the chosen agent status now; the ack (bridge → .delivered) drives
-        // the truthful "Approved". If no ack lands shortly, mark deliveryFailed.
-        store.update(id: session.id) {
-            $0.status = allow ? .running : .interrupted
-            $0.requiresAttention = false
-            $0.latestSummary = allow ? "Approved" : "Denied"
-        }
+        // Written to the live helper; still awaiting the emit-ack. If no ack lands
+        // shortly, mark deliveryFailed (never a false "Approved").
         let id = session.id
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 3 * 1_000_000_000)
             guard let self else { return }
             if self.store.session(id: id)?.approval?.state == .sending {
                 self.store.update(id: id) { $0.approval?.state = .deliveryFailed }
+                AgentApprovalDiagnostics.record(sessionID: id, requestID: rid,
+                                                transition: "delivering → deliveryFailed (no ack)")
             }
         }
     }

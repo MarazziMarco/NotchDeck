@@ -503,6 +503,10 @@ struct PendingApproval: Equatable, Codable {
     /// When (in hybrid mode) the helper stops waiting and the native prompt shows.
     var fallbackDeadline: Date?
     var nativePromptExpected: Bool
+    /// The user's decision, recorded when it is written to the helper (state
+    /// `.sending`) so the delivery acknowledgement can apply the correct session
+    /// status only after real delivery — never on the click alone.
+    var decidedAllow: Bool? = nil
 
     var isLive: Bool { state == .pending }
     func isExpired(now: Date) -> Bool { now >= expiresAt }

@@ -96,12 +96,24 @@ struct TerminalIntegrationView: View {
                 }
             }
 
+            if installed && HookInstaller.needsReinstall(provider) {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                        .foregroundStyle(.orange).font(.system(size: 11))
+                    Text("Installed hooks are outdated. Reinstall Hooks to apply the corrected permission-response format.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+
             HStack(spacing: 8) {
                 Button("Preview") { preview(provider) }
                 Button("Open config") { HookInstaller.openConfigFile(provider) }
                 Button("Copy report") { copyReport(provider) }
-                Button(installed ? "Reinstall" : "Install") { install(provider) }
+                Button(installed ? "Reinstall Hooks" : "Install") { install(provider) }
                 Button("Uninstall") { uninstall(provider) }.disabled(!installed)
+                #if DEBUG
+                Button("Copy Diagnostics") { copyDiagnostics() }
+                #endif
             }
             .controlSize(.small)
         }
@@ -147,6 +159,16 @@ struct TerminalIntegrationView: View {
             message = "Hooks removed for \(provider.rawValue)."
         } catch { message = error.localizedDescription }
     }
+
+    #if DEBUG
+    private func copyDiagnostics() {
+        let text = AgentApprovalDiagnostics.shared.snapshot()
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text.isEmpty ? "No approval/terminal transactions recorded yet." : text,
+                                       forType: .string)
+        message = "Approval diagnostics copied to clipboard."
+    }
+    #endif
 
     private func copyReport(_ provider: TerminalAgentProvider) {
         let report = HookInstaller.diagnosticReport(provider, socketExists: stats.isListening)

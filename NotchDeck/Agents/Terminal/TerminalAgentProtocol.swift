@@ -170,6 +170,53 @@ public struct TerminalAgentDecision: Codable, Equatable {
     }
 }
 
+/// The EXACT provider stdout contract a PermissionRequest hook must emit.
+///
+/// Audited against the installed CLIs (Claude Code 2.1.x, Codex 0.14x): the
+/// `PermissionRequest` hook is answered by
+///   {"hookSpecificOutput":{"hookEventName":"PermissionRequest","permissionDecision":"allow"|"deny"[,"permissionDecisionReason":"…"]}}
+/// The `hookEventName` MUST equal the firing hook event, `permissionDecision`
+/// MUST be one of allow/deny/ask/defer (a plain string — NOT the PreToolUse
+/// `decision:{behavior}` / SDK `{behavior,updatedInput}` shape). An unrecognised
+/// shape is rejected by the CLI ("Unknown hook permissionDecision type") and it
+/// falls back to its own native prompt — the double-confirmation bug.
+///
+/// stdout must contain ONLY this line; all diagnostics go to stderr / the log.
+public enum PermissionResponse {
+    /// The hook event name both providers register the synchronous helper under.
+    public static let hookEventName = "PermissionRequest"
+
+    /// Provider-valid decision JSON (no trailing newline). Deterministic key
+    /// order via sorted keys so it is exactly assertable in tests.
+    public static func json(provider: TerminalAgentProvider,
+                            behavior: TerminalAgentDecision.Behavior,
+                            message: String?) -> String {
+        let decision = behavior == .allow ? "allow" : "deny"
+        let obj: [String: Any]
+        switch provider {
+        case .claudeCode, .codex:
+            var inner: [String: Any] = ["hookEventName": hookEventName,
+                                        "permissionDecision": decision]
+            if behavior == .deny {
+                inner["permissionDecisionReason"] = message ?? "Denied in NotchDeck"
+            }
+            obj = ["hookSpecificOutput": inner]
+        case .unknown:
+            obj = ["permissionDecision": decision]
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
+              let str = String(data: data, encoding: .utf8) else { return "" }
+        return str
+    }
+
+    /// The exact bytes the helper writes to stdout: the JSON line + one newline.
+    public static func stdoutLine(provider: TerminalAgentProvider,
+                                  behavior: TerminalAgentDecision.Behavior,
+                                  message: String?) -> String {
+        json(provider: provider, behavior: behavior, message: message) + "\n"
+    }
+}
+
 /// JSONL codec shared by both sides.
 public enum TerminalAgentCodec {
     public static func encodeLine<T: Encodable>(_ value: T) -> Data? {

@@ -140,32 +140,16 @@ func awaitDecision(_ fd: Int32, requestID: String, timeout: TimeInterval) -> Ter
     return nil
 }
 
-/// Emit the provider-specific decision JSON on stdout.
+/// Emit the provider-valid PermissionRequest decision JSON on stdout, using the
+/// single audited encoder shared with the app/tests. stdout carries ONLY this
+/// line; diagnostics go to the log file / stderr. stdout is flushed explicitly
+/// (piped stdout is block-buffered) before the helper exits.
 func emitDecision(provider: TerminalAgentProvider, decision: TerminalAgentDecision) {
-    let behavior = decision.behavior == .allow ? "allow" : "deny"
-    var obj: [String: Any]
-    switch provider {
-    case .codex:
-        var d: [String: Any] = ["behavior": behavior]
-        if let m = decision.message { d["message"] = m }
-        obj = ["hookSpecificOutput": ["hookEventName": "PermissionRequest", "decision": d]]
-    case .claudeCode:
-        // Claude PermissionRequest decision schema (NOT the PreToolUse schema).
-        var d: [String: Any] = ["behavior": behavior]
-        if decision.behavior == .deny {
-            d["message"] = decision.message ?? "Denied in NotchDeck"
-            d["interrupt"] = false
-        }
-        obj = ["hookSpecificOutput": ["hookEventName": "PermissionRequest", "decision": d]]
-    case .unknown:
-        obj = ["decision": behavior]
-    }
-    // stdout must contain ONLY this JSON. Diagnostics go to the log file / stderr.
-    if let data = try? JSONSerialization.data(withJSONObject: obj),
-       let str = String(data: data, encoding: .utf8) {
-        FileHandle.standardOutput.write(Data((str + "\n").utf8))
-        fflush(stdout)   // ensure the CLI receives it before we exit (piped stdout is block-buffered)
-    }
+    let line = PermissionResponse.stdoutLine(provider: provider,
+                                             behavior: decision.behavior,
+                                             message: decision.message)
+    FileHandle.standardOutput.write(Data(line.utf8))
+    fflush(stdout)
 }
 
 // MARK: Main

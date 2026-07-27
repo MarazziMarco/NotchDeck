@@ -192,15 +192,13 @@ actor TerminalAgentBridge {
             }
         }
 
-        // Helper acknowledged emitting the CLI decision → mark the approval as
-        // truly delivered so the card can show "Approved".
+        // Helper acknowledged emitting the CLI decision → the decision REALLY
+        // reached the provider's stdout. Only now apply the truthful outcome
+        // (status + summary) and dismiss the approval. Success here proves the
+        // provider will continue; native fallback cannot occur for this request.
         if event.type == .decisionDelivered {
             await MainActor.run { [store] in
-                store.update(id: uuid) {
-                    if $0.approval?.state == .sending || $0.approval?.state == .pending {
-                        $0.approval?.state = .delivered
-                    }
-                }
+                store.update(id: uuid) { Self.applyDeliveryAck(&$0) }
             }
             return
         }
@@ -240,7 +238,11 @@ actor TerminalAgentBridge {
             isManaged: false)
         s.isBridgeConnected = true
         s.lastActivityAt = Date(timeIntervalSince1970: event.timestamp)
-        s.terminalTTY = event.tty ?? s.terminalTTY
+        // Canonicalise on store ("ttys003" → "/dev/ttys003"); a later event with no
+        // TTY must NEVER overwrite a valid stored one with nil.
+        if let t = event.tty, !t.trimmingCharacters(in: .whitespaces).isEmpty {
+            s.terminalTTY = TerminalFocus.normalizeTTY(t)
+        }
         s.terminalAppName = event.terminalApp ?? s.terminalAppName
         s.pid = event.pid ?? s.pid
         s.ppid = event.ppid ?? s.ppid
@@ -316,6 +318,22 @@ actor TerminalAgentBridge {
         return s
     }
 
+    /// Apply a delivery acknowledgement to a session (pure + unit-testable). The
+    /// truthful outcome — status + "Approved"/"Denied" — is applied ONLY here,
+    /// when the helper has confirmed emitting the provider response, and the
+    /// approval surface is dismissed. A late/duplicate ack is a no-op.
+    static func applyDeliveryAck(_ s: inout AgentSession) {
+        guard let approval = s.approval,
+              approval.state == .sending || approval.state == .pending else { return }
+        let allow = approval.decidedAllow ?? true
+        s.approval?.state = .delivered
+        s.status = allow ? .running : .interrupted
+        s.requiresAttention = false
+        s.latestSummary = allow ? "Approved" : "Denied"
+        s.pendingApprovalRequestID = nil
+        s.approval = nil            // dismiss — delivery confirmed
+    }
+
     // MARK: Approvals
 
     @discardableResult
@@ -364,8 +382,13 @@ actor TerminalAgentBridge {
                         }
                     } else if let deadline = approval.fallbackDeadline, now >= deadline {
                         let rid = approval.requestID
+                        // Hybrid deadline reached: the native terminal prompt now
+                        // owns this request. Dismiss the NotchDeck approval surface
+                        // immediately so the two never coexist, and stop any
+                        // countdown. A later stale click cannot answer it (gone).
                         store.update(id: session.id) {
-                            $0.approval?.state = .fellBack
+                            $0.approval = nil
+                            $0.pendingApprovalRequestID = nil
                             $0.requiresAttention = false
                         }
                         releases.append(rid)
