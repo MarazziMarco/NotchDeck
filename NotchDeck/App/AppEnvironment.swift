@@ -125,7 +125,8 @@ final class AppEnvironment: ObservableObject {
         Task { [terminalBridge, settings] in
             await terminalBridge.configure(
                 mode: settings.settings.agentPermissionHandlingMode,
-                fallbackDelay: settings.settings.terminalFallbackDelay.seconds)
+                fallbackDelay: settings.settings.terminalFallbackDelay.seconds,
+                approvalLifetime: settings.settings.approvalAvailability.seconds)
         }
 
         // Register data-driven live-activity sources. Adding a module with a live

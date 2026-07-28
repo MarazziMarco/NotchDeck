@@ -72,12 +72,16 @@ final class ApprovalClassificationTests: XCTestCase {
 // MARK: Permission handling modes
 
 final class PermissionHandlingModeTests: XCTestCase {
+    // The card's actionable deadline is now the mirrored approval LIFETIME (not the
+    // old terminal-fallback delay). Tests pass an explicit lifetime.
     private func perm(mode: AgentPermissionHandlingMode, delay: TimeInterval = 8,
+                      lifetime: TimeInterval = 60,
                       now: Date = Date(timeIntervalSince1970: 1000)) -> AgentSession {
         let e = TerminalAgentEvent(type: .permissionRequested, provider: .claudeCode,
                                    sessionID: "S", cwd: "/p", timestamp: 1000, requestID: "R1")
         return TerminalAgentBridge.reduce(existing: nil, id: UUID(), event: e,
-                                          handlingMode: mode, fallbackDelay: delay, now: now)
+                                          handlingMode: mode, fallbackDelay: delay,
+                                          approvalLifetime: lifetime, now: now)
     }
 
     func testTerminalOnlyHasNoFunctionalDecision() {
@@ -93,21 +97,21 @@ final class PermissionHandlingModeTests: XCTestCase {
         XCTAssertNil(s.approval?.fallbackDeadline)
         XCTAssertFalse(s.approval?.nativePromptExpected == true)
     }
-    func testHybridSetsFallbackDeadline() {
+    func testHybridSetsLifetimeDeadline() {
         let now = Date(timeIntervalSince1970: 1000)
-        let s = perm(mode: .notchWithTerminalFallback, delay: 8, now: now)
+        let s = perm(mode: .notchWithTerminalFallback, lifetime: 8, now: now)
         XCTAssertEqual(s.approval?.fallbackDeadline, now.addingTimeInterval(8))
         XCTAssertTrue(s.approval?.nativePromptExpected == true)
     }
     func testHybridAnsweredBeforeDeadlineStillLive() {
         let now = Date(timeIntervalSince1970: 1000)
-        let s = perm(mode: .notchWithTerminalFallback, delay: 8, now: now)
+        let s = perm(mode: .notchWithTerminalFallback, lifetime: 8, now: now)
         XCTAssertEqual(s.approval?.fallbackRemaining(now: now), 8)
         XCTAssertGreaterThan(s.approval!.fallbackRemaining(now: now.addingTimeInterval(3))!, 0)
     }
     func testHybridAfterDeadlineFallbackElapsed() {
         let now = Date(timeIntervalSince1970: 1000)
-        let s = perm(mode: .notchWithTerminalFallback, delay: 8, now: now)
+        let s = perm(mode: .notchWithTerminalFallback, lifetime: 8, now: now)
         XCTAssertEqual(s.approval?.fallbackRemaining(now: now.addingTimeInterval(20)), 0)
     }
     func testNoModeAutoApproves() {

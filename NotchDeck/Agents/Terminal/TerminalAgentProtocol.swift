@@ -25,21 +25,36 @@ public enum TerminalAgentProtocol {
     }
 }
 
-/// The three approval timeouts. INVARIANT (validated by test):
-///   UI fallback  <  helper hard deadline  <  Claude hook timeout
-/// so the outer Claude hook always outlives the helper, and the helper always
-/// outlives the UI decision window.
+/// Approval timeouts. INVARIANTS (validated by test):
+///   maximumUIFallback < notchOnlyDecision < helperHardDeadline < Claude hook
+///   AND  maxApprovalLifetime  <  helperHardDeadline
+/// so the helper keeps the mirrored socket alive at least as long as the longest
+/// user-selectable approval lifetime, and the outer provider hook always outlives
+/// the helper. The user-configurable "approval availability" is a DIFFERENT
+/// concept from these internal transport deadlines (which merely bound them).
 public enum HookTimeouts {
     public static let uiFallbackSeconds: TimeInterval = 8
     public static let maximumUIFallbackSeconds: TimeInterval = 15
     public static let notchOnlyDecisionSeconds: TimeInterval = 20
-    public static let helperHardDeadlineSeconds: TimeInterval = 25
-    public static let claudeHookTimeoutSeconds: Int = 30
+
+    /// The maximum user-selectable approval lifetime (5 minutes). Every internal
+    /// transport deadline below is sized to safely outlive this.
+    public static let maxApprovalLifetimeSeconds: TimeInterval = 300
+
+    /// The helper blocks on its socket at most this long (it is released earlier,
+    /// as soon as the card's approval lifetime elapses). Must exceed the maximum
+    /// approval lifetime so a 5-minute card is genuinely supported end-to-end.
+    public static let helperHardDeadlineSeconds: TimeInterval = 315
+
+    /// Provider-enforced kill of a synchronous hook. Written into the installed
+    /// hook config; must outlive the helper. Sized above the 5-minute lifetime.
+    public static let claudeHookTimeoutSeconds: Int = 330
 
     public static var isValidHierarchy: Bool {
         maximumUIFallbackSeconds < notchOnlyDecisionSeconds
             && notchOnlyDecisionSeconds < helperHardDeadlineSeconds
             && helperHardDeadlineSeconds < TimeInterval(claudeHookTimeoutSeconds)
+            && maxApprovalLifetimeSeconds < helperHardDeadlineSeconds
     }
 }
 

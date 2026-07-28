@@ -18,12 +18,16 @@ struct AgentsSettingsView: View {
             Picker("Permission handling", selection: $settings.settings.agentPermissionHandlingMode) {
                 ForEach(AgentPermissionHandlingMode.allCases) { Text($0.label).tag($0) }
             }
-            if settings.settings.agentPermissionHandlingMode == .notchWithTerminalFallback {
-                Picker("Terminal fallback delay", selection: $settings.settings.terminalFallbackDelay) {
-                    ForEach(TerminalFallbackDelay.allCases) { Text($0.label).tag($0) }
+            if settings.settings.agentPermissionHandlingMode != .terminalOnly {
+                Picker("Approval availability", selection: $settings.settings.approvalAvailability) {
+                    ForEach(ApprovalAvailability.allCases) { Text($0.label).tag($0) }
                 }
+                .accessibilityLabel(Text("Approval availability"))
+                .accessibilityHint(Text("How long an approval remains actionable in NotchDeck. The same request may also be answered in Terminal."))
+                Text("How long an approval remains actionable in NotchDeck. The same request may also be answered in Terminal.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            Text("NotchDeck answers a permission request, hands off to the native terminal prompt, or NotchDeck-first with terminal fallback. It never simulates keystrokes and never auto-approves. These are sequential options, not simultaneous dual approval.")
+            Text("NotchDeck answers a permission request; the same request is also answerable in the native terminal prompt. It never simulates keystrokes and never auto-approves.")
                 .font(.caption).foregroundStyle(.secondary)
             Toggle("Open the notch when an agent needs approval", isOn: $settings.settings.autoOpenOnApproval)
             Toggle("Open the notch when an agent needs input", isOn: $settings.settings.autoOpenOnInput)

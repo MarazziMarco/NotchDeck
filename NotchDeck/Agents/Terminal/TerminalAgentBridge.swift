@@ -51,6 +51,10 @@ actor TerminalAgentBridge {
     /// Permission UX configuration (set from settings via `configure`).
     private var handlingMode: AgentPermissionHandlingMode = .notchWithTerminalFallback
     private var fallbackDelay: TimeInterval = 8
+    /// User-configured mirrored-approval lifetime (seconds), clamped to the
+    /// internal transport ceiling. New transactions use the current value; a
+    /// pending transaction keeps the deadline it was created with.
+    private var approvalLifetime: TimeInterval = ApprovalAvailability.default.seconds
 
     /// Whether the Agents UI module is available to present approvals. When the
     /// Agents module is DISABLED the socket stays alive (a minimal responder) so
@@ -70,9 +74,11 @@ actor TerminalAgentBridge {
         self.stats = stats
     }
 
-    func configure(mode: AgentPermissionHandlingMode, fallbackDelay: TimeInterval) async {
+    func configure(mode: AgentPermissionHandlingMode, fallbackDelay: TimeInterval,
+                   approvalLifetime: TimeInterval = ApprovalAvailability.default.seconds) async {
         self.handlingMode = mode
         self.fallbackDelay = min(fallbackDelay, HookTimeouts.maximumUIFallbackSeconds)
+        self.approvalLifetime = min(max(approvalLifetime, 1), HookTimeouts.maxApprovalLifetimeSeconds)
         if mode == .terminalOnly {
             await releaseAllPendingToTerminal(reason: "fallback:terminal-only")
         }
@@ -326,10 +332,12 @@ actor TerminalAgentBridge {
 
         let mode = handlingMode
         let delay = fallbackDelay
+        let lifetime = approvalLifetime
         await MainActor.run { [store, stats] in
             let existing = store.session(id: uuid)
             let updated = Self.reduce(existing: existing, id: uuid, event: event,
-                                      handlingMode: mode, fallbackDelay: delay)
+                                      handlingMode: mode, fallbackDelay: delay,
+                                      approvalLifetime: lifetime)
             // SessionStart (and every event) updates the store immediately on the
             // MainActor — no waiting on the 5s external scan.
             store.upsert(updated)
@@ -348,6 +356,7 @@ actor TerminalAgentBridge {
     static func reduce(existing: AgentSession?, id: UUID, event: TerminalAgentEvent,
                        handlingMode: AgentPermissionHandlingMode = .notchWithTerminalFallback,
                        fallbackDelay: TimeInterval = 8,
+                       approvalLifetime: TimeInterval = ApprovalAvailability.default.seconds,
                        now: Date = Date()) -> AgentSession {
         var s = existing ?? AgentSession(
             id: id,
@@ -454,8 +463,18 @@ actor TerminalAgentBridge {
             }
             let summary = AgentLatestMessage.sanitize(event.summary
                 ?? event.toolName.map { "\($0) — permission requested" } ?? "Permission requested")
-            let fallbackDeadline = handlingMode == .notchWithTerminalFallback
-                ? now.addingTimeInterval(fallbackDelay) : nil
+            // The card stays actionable for the configured approval lifetime.
+            // Terminal remains answerable the whole time (mirrored) — this is NOT
+            // a "delay before the terminal prompt". At the end the still-blocked
+            // helper is released so it cannot hang; it never auto-allows/denies.
+            // The lifetime is clamped to the internal transport ceiling so a
+            // 5-minute selection is genuinely supported end-to-end.
+            let lifetime = min(max(approvalLifetime, 1), HookTimeouts.maxApprovalLifetimeSeconds)
+            // In modes where the native terminal prompt is expected (mirrored /
+            // fallback), releasing the helper when the lifetime elapses returns the
+            // request to the already-visible terminal prompt.
+            let fallbackDeadline = handlingMode.nativePromptExpected
+                ? now.addingTimeInterval(lifetime) : nil
             s.status = .waitingForApproval
             s.requiresAttention = handlingMode.showsFunctionalDecision
             s.latestSummary = summary
@@ -470,11 +489,10 @@ actor TerminalAgentBridge {
                 toolName: event.toolName,
                 summary: summary,
                 receivedAt: now,
-                expiresAt: now.addingTimeInterval(
-                    handlingMode == .notchOnly
-                        ? HookTimeouts.notchOnlyDecisionSeconds
-                        : HookTimeouts.helperHardDeadlineSeconds
-                ),
+                // Hard expiry sits just past the actionable lifetime as a safety net
+                // (the fallback release normally fires first). Both stay well under
+                // the helper hard deadline.
+                expiresAt: now.addingTimeInterval(lifetime + 5),
                 state: .pending,
                 handlingMode: handlingMode,
                 fallbackDeadline: fallbackDeadline,
