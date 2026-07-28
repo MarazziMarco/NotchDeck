@@ -62,6 +62,19 @@ final class SettingsStore: ObservableObject {
         saveNow()
     }
 
+    /// Applies one atomic More edit, normalized against stable More metadata, and
+    /// flushes immediately. Operates ONLY on `moreLayout` (+ the shared
+    /// `moduleEnabled` for placement); never touches any Home field.
+    func updateMoreLayout(definitions: [MoreModuleDescriptor],
+                          _ update: (inout AppSettings) -> Void) {
+        var next = settings
+        MoreLayoutNormalizer.normalize(&next.moreLayout, definitions: definitions)
+        update(&next)
+        MoreLayoutNormalizer.normalize(&next.moreLayout, definitions: definitions)
+        settings = next
+        saveNow()
+    }
+
     /// Authoritative Agents-workspace enablement (see `AgentsModule`).
     var agentsEnabled: Bool { AgentsModule.isEnabled(settings) }
 }
