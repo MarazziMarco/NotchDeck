@@ -150,7 +150,9 @@ final class ProviderAppearanceTests: XCTestCase {
     }
     func testCodexResolvesToSuppliedAsset() {
         let a = AgentProviderAppearanceRegistry.appearance(.codex)
-        XCTAssertEqual(a.assetLight, "AgentLogoCodexLight")
+        // The supplied "Light" file has a baked checkerboard background.
+        // Use the transparent Codex artwork on either notch surface.
+        XCTAssertEqual(a.assetLight, "AgentLogoCodexDark")
         XCTAssertEqual(a.assetDark, "AgentLogoCodexDark")
     }
     func testGeminiResolvesToSuppliedAsset() {

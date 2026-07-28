@@ -17,8 +17,7 @@ final class NotchLayoutInfo: ObservableObject {
     @Published var physicalIdle: Bool = false
     /// Compact Focus timer uses content-driven asymmetric wings.
     @Published var compactFocus: Bool = false
-    /// Explicit wing widths (used only for compact Focus). When 0, fall back to
-    /// the symmetric `wingWidth`.
+    /// Explicit asymmetric wing widths for compact Focus and Agents.
     @Published var leftWingWidth: CGFloat = 0
     @Published var rightWingWidth: CGFloat = 0
 

@@ -189,18 +189,30 @@ final class NotchPanelController {
         let live = environment.liveActivity.layout
         let compactActivity = !live.isEmpty
         let isFocus = live.isFocusTimer && metrics.hasNotch
-        let focusWings: (left: CGFloat, right: CGFloat)? =
-            isFocus ? (CompactFocusGeometry.leftWingWidth, CompactFocusGeometry.rightWingWidth) : nil
-        let focusExtra = isFocus ? CompactFocusGeometry.totalExtraWidth : extra
+        let isAgent = live.compactAgentIndicator != nil && metrics.hasNotch
+        let agentWings = (
+            left: live.leading?.providerVendor == .claudeCode
+                ? CompactAgentIndicatorGeometry.wingWidth : 0,
+            right: live.trailing?.providerVendor == .codex
+                ? CompactAgentIndicatorGeometry.wingWidth : 0
+        )
+        let compactWings: (left: CGFloat, right: CGFloat)? = isFocus
+            ? (CompactFocusGeometry.leftWingWidth, CompactFocusGeometry.rightWingWidth)
+            : isAgent ? agentWings : nil
+        let compactExtra = isFocus
+            ? CompactFocusGeometry.totalExtraWidth
+            : isAgent ? agentWings.left + agentWings.right : extra
         var layout = NotchGeometryService.layout(
             for: metrics,
             state: state,
             face: environment.appState.face,
             expandedContentHeight: contentResponsive.dashboardHeight,
-            compactExtraWidth: focusExtra,
+            compactExtraWidth: compactExtra,
             compactActivity: compactActivity,
-            compactWings: focusWings,
-            compactActivityHeight: isFocus ? CompactFocusGeometry.visualHeight : nil)
+            compactWings: compactWings,
+            compactActivityHeight: isFocus
+                ? CompactFocusGeometry.visualHeight
+                : isAgent ? CompactAgentIndicatorGeometry.visualHeight(for: metrics) : nil)
 
         // Override the expanded frame with the responsive, edge-safe frame.
         if state == .expanded, let geo {
@@ -239,18 +251,30 @@ final class NotchPanelController {
     private func updateHotZones(metrics: DisplayMetrics, layout: NotchLayout,
                                 state: NotchPresentationState) {
         let focus = isCompactFocus(metrics)
+        let live = environment.liveActivity.layout
+        let agent = live.compactAgentIndicator != nil && metrics.hasNotch
+        let leftAgentWing = live.leading?.providerVendor == .claudeCode
+            ? CompactAgentIndicatorGeometry.wingWidth : 0
+        let rightAgentWing = live.trailing?.providerVendor == .codex
+            ? CompactAgentIndicatorGeometry.wingWidth : 0
         let cWidth = focus
             ? metrics.notchWidth + CompactFocusGeometry.totalExtraWidth
-            : NotchGeometryService.compactWidth(for: metrics) + compactExtraWidth()
+            : agent
+                ? metrics.notchWidth + leftAgentWing + rightAgentWing
+                : NotchGeometryService.compactWidth(for: metrics) + compactExtraWidth()
         // Hover/activation follows the compact capsule so hovering the rounded
         // ends (and the area just below) opens NotchDeck.
         let cHeight = focus
             ? CompactFocusGeometry.visualHeight
-            : NotchGeometryService.compactVisualHeight(for: metrics)
+            : agent
+                ? CompactAgentIndicatorGeometry.visualHeight(for: metrics)
+                : NotchGeometryService.compactVisualHeight(for: metrics)
         let extraSide: CGFloat = 46
         let extraBelow: CGFloat = 16
         let activation = CGRect(
-            x: metrics.frame.midX - cWidth / 2 - extraSide,
+            x: agent
+                ? metrics.frame.midX - metrics.notchWidth / 2 - leftAgentWing - extraSide
+                : metrics.frame.midX - cWidth / 2 - extraSide,
             y: metrics.frame.maxY - cHeight - extraBelow,
             width: cWidth + extraSide * 2,
             height: cHeight + extraBelow)
@@ -275,17 +299,25 @@ final class NotchPanelController {
         let info = environment.notchLayout
         let idle = environment.liveActivity.layout.isEmpty && !environment.appState.isExpanded
         let focus = isCompactFocus(metrics)
+        let live = environment.liveActivity.layout
+        let agent = live.compactAgentIndicator != nil && metrics.hasNotch
+        let agentLeft = live.leading?.providerVendor == .claudeCode
+            ? CompactAgentIndicatorGeometry.wingWidth : 0
+        let agentRight = live.trailing?.providerVendor == .codex
+            ? CompactAgentIndicatorGeometry.wingWidth : 0
         info.hasNotch = metrics.hasNotch
         info.physicalNotchHeight = metrics.notchHeight
         info.physicalIdle = idle
         info.compactFocus = focus
-        info.leftWingWidth = focus ? CompactFocusGeometry.leftWingWidth : 0
-        info.rightWingWidth = focus ? CompactFocusGeometry.rightWingWidth : 0
+        info.leftWingWidth = focus ? CompactFocusGeometry.leftWingWidth : agentLeft
+        info.rightWingWidth = focus ? CompactFocusGeometry.rightWingWidth : agentRight
         // Idle → exact notch width; Focus → content-driven; other activity → symmetric.
         info.compactPanelWidth = idle
             ? NotchGeometryService.physicalIdleSize(for: metrics).width
             : focus
                 ? metrics.notchWidth + CompactFocusGeometry.totalExtraWidth
+                : agent
+                    ? metrics.notchWidth + agentLeft + agentRight
                 : NotchGeometryService.compactWidth(for: metrics) + compactExtraWidth()
         info.housingWidth = metrics.hasNotch ? metrics.notchWidth : 0
     }

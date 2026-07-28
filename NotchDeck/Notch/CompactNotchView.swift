@@ -61,19 +61,16 @@ struct CompactNotchView: View {
 
     @ViewBuilder private func wings<L: View, T: View>(leading: L, trailing: T) -> some View {
         if layout.hasNotch && current.compactAgentIndicator != nil {
-            // Stable symmetric footprint with all padding *inside* each fixed wing.
-            // This keeps the physical-notch exclusion centred and gives the typed
-            // indicator a truthful width proposal for ViewThatFits.
             HStack(spacing: 0) {
                 leading
                     .padding(.leading, CompactAgentIndicatorGeometry.outerEdgeInset)
                     .padding(.trailing, CompactAgentIndicatorGeometry.notchSafeInset)
-                    .frame(width: CompactAgentIndicatorGeometry.wingWidth)
+                    .frame(width: layout.leftWingWidth, alignment: .leading)
                 Color.clear.frame(width: layout.housingWidth)
                 trailing
                     .padding(.leading, CompactAgentIndicatorGeometry.notchSafeInset)
                     .padding(.trailing, CompactAgentIndicatorGeometry.outerEdgeInset)
-                    .frame(width: CompactAgentIndicatorGeometry.wingWidth)
+                    .frame(width: layout.rightWingWidth, alignment: .trailing)
             }
         } else if layout.hasNotch && layout.compactFocus {
             // Dedicated compact FOCUS layout: content-driven asymmetric wings. The
@@ -228,10 +225,11 @@ struct WingSlotView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            if let model = slot.compactAgentIndicator {
+            if let model = slot.compactAgentIndicator, let vendor = slot.providerVendor {
                 CompactAgentIndicatorView(
+                    vendor: vendor,
                     model: model,
-                    accent: slot.compactAgentAccent ?? .orange,
+                    reduceMotion: reduceMotion,
                     activate: activateAgent
                 )
             } else if let vendor = slot.providerVendor {

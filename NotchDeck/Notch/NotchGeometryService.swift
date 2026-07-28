@@ -122,6 +122,9 @@ enum NotchGeometryService {
             panelWidth = cWidth
             panelHeight = compactCapsuleHeight + DesignTokens.Metrics.peekExtraHeight
             stripHeight = compactCapsuleHeight
+            if let wings = compactWings, metrics.hasNotch {
+                notchCentreInPanel = wings.left + metrics.notchWidth / 2
+            }
         case .expanded:
             panelWidth = max(cWidth, expandedWidth(for: face))
             panelHeight = min(

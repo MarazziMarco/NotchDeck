@@ -56,7 +56,9 @@ final class LiveActivityCoordinator: ObservableObject {
         if primary.exclusive {
             if primary.slot.compactAgentIndicator != nil {
                 return LiveActivityLayout(
-                    trailing: primary.slot,
+                    leading: primary.splitLeading,
+                    trailing: primary.splitTrailing
+                        ?? (primary.splitLeading == nil ? primary.slot : nil),
                     attention: true,
                     tapTarget: primary.tapTarget
                 )

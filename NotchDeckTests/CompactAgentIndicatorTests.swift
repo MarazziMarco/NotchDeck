@@ -235,6 +235,33 @@ final class CompactAgentIndicatorInputDerivationTests: XCTestCase {
             .deliveryFailed
         )
     }
+
+    func testSessionDerivationPreservesProviderPresenceWithoutNamesOrCounts() {
+        var claude = AgentSession(
+            provider: .claudeCode,
+            title: "private-claude-session",
+            projectPath: "/private/project",
+            status: .running
+        )
+        claude.terminalPresence = .present
+        var codex = AgentSession(
+            provider: .codex,
+            title: "private-codex-session",
+            projectPath: "/private/project",
+            status: .running
+        )
+        codex.terminalPresence = .present
+
+        let inputs = CompactAgentIndicatorInputs.resolve(
+            activeSessions: [claude, codex],
+            displayPreference: .activeCount
+        )
+
+        XCTAssertTrue(inputs.providers.showsClaude)
+        XCTAssertTrue(inputs.providers.showsCodex)
+        XCTAssertEqual(inputs.providers.leadingVendor, .claudeCode)
+        XCTAssertEqual(inputs.providers.trailingVendor, .codex)
+    }
 }
 
 final class CompactAgentActivityFactoryTests: XCTestCase {
@@ -263,6 +290,44 @@ final class CompactAgentActivityFactoryTests: XCTestCase {
         )
         XCTAssertFalse(active.exclusive)
         XCTAssertTrue(approval.exclusive)
+    }
+
+    func testProviderPresentationUsesLogosOnlyOnTheirRespectiveWings() throws {
+        let presentation = CompactAgentPresentation(
+            state: .activeSessions(count: 2),
+            providers: .init(showsClaude: true, showsCodex: true)
+        )
+        let activity = try XCTUnwrap(
+            CompactAgentActivityFactory.make(for: presentation)
+        )
+
+        XCTAssertEqual(activity.splitLeading?.providerVendor, .claudeCode)
+        XCTAssertEqual(activity.splitTrailing?.providerVendor, .codex)
+        for slot in [activity.splitLeading, activity.splitTrailing].compactMap({ $0 }) {
+            XCTAssertNil(slot.symbol)
+            XCTAssertNil(slot.text)
+            XCTAssertNil(slot.badge)
+        }
+    }
+
+    func testSingleProviderStaysOnItsDeclaredSide() throws {
+        let claude = try XCTUnwrap(CompactAgentActivityFactory.make(
+            for: CompactAgentPresentation(
+                state: .activeSessions(count: 1),
+                providers: .init(showsClaude: true, showsCodex: false)
+            )
+        ))
+        XCTAssertEqual(claude.splitLeading?.providerVendor, .claudeCode)
+        XCTAssertNil(claude.splitTrailing)
+
+        let codex = try XCTUnwrap(CompactAgentActivityFactory.make(
+            for: CompactAgentPresentation(
+                state: .activeSessions(count: 1),
+                providers: .init(showsClaude: false, showsCodex: true)
+            )
+        ))
+        XCTAssertNil(codex.splitLeading)
+        XCTAssertEqual(codex.splitTrailing?.providerVendor, .codex)
     }
 }
 
@@ -365,6 +430,22 @@ final class CompactAgentGeometryTests: XCTestCase {
             CompactGeometrySignature.resolve(focusLayout),
             CompactGeometrySignature.resolve(approvalLayout)
         )
+    }
+
+    func testAgentCompactHeightMatchesPhysicalNotchAndUsesTightWings() {
+        let metrics = DisplayMetrics(
+            frame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+            notchHeight: 32,
+            notchWidth: 200,
+            backingScaleFactor: 2
+        )
+        XCTAssertEqual(CompactAgentIndicatorGeometry.visualHeight(for: metrics), 32)
+        XCTAssertEqual(
+            CompactAgentIndicatorGeometry.totalExtraWidth,
+            CompactAgentIndicatorGeometry.wingWidth * 2
+        )
+        XCTAssertLessThanOrEqual(CompactAgentIndicatorGeometry.wingWidth, 34)
+        XCTAssertLessThanOrEqual(CompactAgentIndicatorGeometry.outerEdgeInset, 6)
     }
 }
 

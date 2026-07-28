@@ -106,7 +106,10 @@ final class AgentSessionStore: ObservableObject, LiveActivitySource {
                 displayPreference: compactDisplay
             )
             let model = CompactAgentIndicatorModel.resolve(inputs)
-            return CompactAgentActivityFactory.make(for: model, accent: compactAccent)
+            return CompactAgentActivityFactory.make(
+                for: CompactAgentPresentation(state: model, providers: inputs.providers),
+                accent: compactAccent
+            )
         }
     }
 

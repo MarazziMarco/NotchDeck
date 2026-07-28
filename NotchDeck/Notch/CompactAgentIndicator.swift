@@ -1,13 +1,14 @@
 import SwiftUI
 
-/// Plain, count-only inputs for the compact Agents surface. Provider, project,
-/// session and tool names never cross this presentation boundary.
+/// Normalized inputs for the compact Agents surface. Provider presence crosses
+/// this boundary; project, session and tool names never do.
 struct CompactAgentIndicatorInputs: Equatable {
     var activeSessionCount: Int = 0
     var pendingApprovalCount: Int = 0
     var inputRequiredCount: Int = 0
     var transactionStates: [PendingApproval.ResponseState] = []
     var displayPreference: CompactAgentsDisplay = .activeCount
+    var providers: CompactAgentProviderPresence = .init()
 
     static func resolve(
         activeSessions: [AgentSession],
@@ -21,8 +22,61 @@ struct CompactAgentIndicatorInputs: Equatable {
             pendingApprovalCount: approvals.filter { $0.state == .pending }.count,
             inputRequiredCount: activeSessions.filter { $0.status == .waitingForInput }.count,
             transactionStates: approvals.map(\.state),
-            displayPreference: displayPreference
+            displayPreference: displayPreference,
+            providers: CompactAgentProviderPresence(activeSessions: activeSessions)
         )
+    }
+}
+
+/// The compact notch intentionally exposes provider presence, never session
+/// counts or private session metadata. Claude owns the left wing and Codex the
+/// right wing, so changes in session count cannot move either mark.
+struct CompactAgentProviderPresence: Equatable {
+    var showsClaude = false
+    var showsCodex = false
+
+    init(showsClaude: Bool = false, showsCodex: Bool = false) {
+        self.showsClaude = showsClaude
+        self.showsCodex = showsCodex
+    }
+
+    init(activeSessions: [AgentSession]) {
+        showsClaude = activeSessions.contains { $0.provider == .claudeCode }
+        showsCodex = activeSessions.contains { $0.provider == .codex }
+    }
+
+    var leadingVendor: AgentVendor? { showsClaude ? .claudeCode : nil }
+    var trailingVendor: AgentVendor? { showsCodex ? .codex : nil }
+    var isEmpty: Bool { !showsClaude && !showsCodex }
+}
+
+struct CompactAgentPresentation: Equatable {
+    var state: CompactAgentIndicatorModel
+    var providers: CompactAgentProviderPresence
+
+    var isVisible: Bool { state.isVisible && !providers.isEmpty }
+    var accessibilityLabel: String {
+        let names = [
+            providers.showsClaude ? "Claude Code" : nil,
+            providers.showsCodex ? "Codex" : nil
+        ].compactMap { $0 }
+        let providerText = names.joined(separator: " and ")
+        switch state {
+        case .approvalRequired:
+            return "\(providerText) approval required"
+        case .inputRequired:
+            return "\(providerText) input required"
+        case .deliveryInProgress:
+            return "\(providerText) response delivery in progress"
+        case .deliveryFailed:
+            return "\(providerText) approval delivery failed"
+        case .terminalFallback:
+            return "Respond to \(providerText) in Terminal"
+        case .activeSessions:
+            return "\(providerText) active"
+        case .hidden:
+            return ""
+        }
     }
 }
 
@@ -57,7 +111,9 @@ enum CompactAgentIndicatorModel: Equatable {
             return .inputRequired(count: inputs)
         }
 
-        if states.contains(where: { [.sending, .sent, .helperExited].contains($0) }) {
+        if states.contains(where: {
+            [.sending, .sent, .providerOutputClosed, .helperTerminated, .helperExited].contains($0)
+        }) {
             return .deliveryInProgress
         }
 
@@ -152,27 +208,25 @@ enum CompactAgentIndicatorModel: Equatable {
     }
 }
 
-/// Stable, notch-safe footprint for every visible compact Agents state. Counts
-/// change content, never panel width. Insets live *inside* the fixed right wing.
+/// Stable, notch-safe provider wings. Session count never changes their size.
 enum CompactAgentIndicatorGeometry {
-    static let visualHeight: CGFloat = DesignTokens.Metrics.compactVisualHeight
-    static let wingWidth: CGFloat = 84
+    static let wingWidth: CGFloat = 30
     static let totalExtraWidth: CGFloat = wingWidth * 2
-    static let notchSafeInset: CGFloat = 20
-    static let outerEdgeInset: CGFloat = 14
-    static let iconSize: CGFloat = 17
-    static let indicatorHeight: CGFloat = 26
-    static let standardSpacing: CGFloat = 5
-    static let badgeHeight: CGFloat = 14
-    static let badgeMinimumWidth: CGFloat = 14
+    static let notchSafeInset: CGFloat = 5
+    static let outerEdgeInset: CGFloat = 5
+    static let iconSize: CGFloat = 20
 
-    static let rightWingRect = CGRect(x: 0, y: 0, width: wingWidth, height: visualHeight)
+    static let rightWingRect = CGRect(x: 0, y: 0, width: wingWidth, height: 32)
     static let rightWingContentRect = CGRect(
         x: notchSafeInset,
         y: 0,
         width: wingWidth - notchSafeInset - outerEdgeInset,
-        height: visualHeight
+        height: 32
     )
+
+    static func visualHeight(for metrics: DisplayMetrics) -> CGFloat {
+        metrics.hasNotch ? metrics.notchHeight : DesignTokens.Metrics.compactHeight
+    }
 
     static func extraWidth(for model: CompactAgentIndicatorModel) -> CGFloat {
         model.isVisible ? totalExtraWidth : 0
@@ -213,6 +267,51 @@ enum CompactAgentActivityFactory {
             attention: model.overridesFocus,
             tapTarget: .face(.agents),
             exclusive: model.overridesFocus
+        )
+    }
+
+    static func make(
+        for presentation: CompactAgentPresentation,
+        accent: AgentCompactAccent = .orange
+    ) -> ResolvedActivity? {
+        guard presentation.isVisible else { return nil }
+
+        let priority: LiveActivityPriority
+        switch presentation.state {
+        case .deliveryFailed, .terminalFallback, .approvalRequired:
+            priority = .approval
+        case .inputRequired:
+            priority = .input
+        case .deliveryInProgress:
+            priority = .agentDelivery
+        case .activeSessions:
+            priority = .agentsRunning
+        case .hidden:
+            return nil
+        }
+
+        let urgent = presentation.state.overridesFocus
+        func slot(_ vendor: AgentVendor) -> WingSlot {
+            WingSlot(
+                pulse: urgent,
+                providerVendor: vendor,
+                compactAgentIndicator: presentation.state,
+                compactAgentAccent: accent
+            )
+        }
+        let leading = presentation.providers.leadingVendor.map(slot)
+        let trailing = presentation.providers.trailingVendor.map(slot)
+        let primary = trailing ?? leading!
+        return ResolvedActivity(
+            id: "agents",
+            priority: priority,
+            slot: primary,
+            preferredWing: trailing != nil ? .trailing : .leading,
+            attention: urgent,
+            tapTarget: .face(.agents),
+            exclusive: urgent,
+            splitLeading: leading,
+            splitTrailing: trailing
         )
     }
 }
@@ -257,93 +356,51 @@ enum CompactNotchInteractionPolicy {
     }
 }
 
-/// Icon-led adaptive indicator. Each candidate is intrinsically sized, so
-/// `ViewThatFits` selects a complete variant rather than truncating a larger one.
+/// Provider-only compact mark. Urgent states use the same stable footprint and a
+/// restrained breath; no count, text or badge is ever mounted.
 struct CompactAgentIndicatorView: View {
+    let vendor: AgentVendor
     let model: CompactAgentIndicatorModel
-    var accent: AgentCompactAccent = .orange
+    var reduceMotion = false
     let activate: () -> Void
+    @State private var breathing = false
 
     var body: some View {
         Button(action: activate) {
-            ViewThatFits(in: .horizontal) {
-                labelledVariant
-                countedVariant
-                badgeVariant
-            }
-            .frame(height: CompactAgentIndicatorGeometry.indicatorHeight)
+            AgentProviderLogo(
+                appearance: AgentProviderAppearanceRegistry.appearance(vendor),
+                size: CompactAgentIndicatorGeometry.iconSize,
+                darkBackground: true
+            )
+            .scaleEffect(breathing ? 1.035 : 1)
+            .opacity(breathing ? 0.82 : 1)
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(model.accessibilityLabel))
+        .accessibilityLabel(Text(accessibilityLabel))
+        .onAppear { updateAnimation() }
+        .onChange(of: reduceMotion) { _, _ in updateAnimation() }
+        .onChange(of: model) { _, _ in updateAnimation() }
     }
 
-    private var statusIcon: some View {
-        Image(systemName: model.symbolName)
-            .font(.system(
-                size: CompactAgentIndicatorGeometry.iconSize,
-                weight: .semibold
-            ))
-            .foregroundStyle(model.tint(activeAccent: accent).color)
-            .accessibilityHidden(true)
-    }
-
-    private var labelledVariant: some View {
-        HStack(spacing: CompactAgentIndicatorGeometry.standardSpacing) {
-            statusIcon
-            if let label = model.conciseLabel {
-                Text(label)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(DesignTokens.Palette.primaryText)
-                    .fixedSize()
-            }
-            countText
+    private var accessibilityLabel: String {
+        let provider = AgentProviderAppearanceRegistry.appearance(vendor).displayName
+        switch model {
+        case .approvalRequired: return "\(provider) approval required"
+        case .inputRequired: return "\(provider) input required"
+        case .deliveryInProgress: return "\(provider) response delivery in progress"
+        case .deliveryFailed: return "\(provider) approval delivery failed"
+        case .terminalFallback: return "Respond to \(provider) in Terminal"
+        case .activeSessions: return "\(provider) active"
+        case .hidden: return ""
         }
-        .fixedSize()
     }
 
-    private var countedVariant: some View {
-        HStack(spacing: CompactAgentIndicatorGeometry.standardSpacing) {
-            statusIcon
-            countText
-        }
-        .fixedSize()
-    }
-
-    private var badgeVariant: some View {
-        statusIcon
-            .frame(
-                width: CompactAgentIndicatorGeometry.indicatorHeight,
-                height: CompactAgentIndicatorGeometry.indicatorHeight
-            )
-            .overlay(alignment: .topTrailing) {
-                if let count = model.compactCountText {
-                    Text(count)
-                        .font(.system(size: 9, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(.black)
-                        .frame(
-                            minWidth: CompactAgentIndicatorGeometry.badgeMinimumWidth,
-                            minHeight: CompactAgentIndicatorGeometry.badgeHeight
-                        )
-                        .padding(.horizontal, count == "9+" ? 2 : 0)
-                        .background(model.tint(activeAccent: accent).color, in: Capsule())
-                        .offset(x: 7, y: -4)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                }
-            }
-            .padding(.trailing, model.compactCountText == nil ? 0 : 7)
-    }
-
-    @ViewBuilder private var countText: some View {
-        if let count = model.compactCountText {
-            Text(count)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(DesignTokens.Palette.primaryText)
-                .fixedSize()
-                .accessibilityHidden(true)
+    private func updateAnimation() {
+        breathing = false
+        guard model != .hidden, !reduceMotion else { return }
+        withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
+            breathing = true
         }
     }
 }
