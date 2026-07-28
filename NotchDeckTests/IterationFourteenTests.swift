@@ -4,17 +4,18 @@ import XCTest
 // MARK: Black rounded lower corners
 
 final class BackgroundCornerFixTests: XCTestCase {
-    func testOnlyStandardUsesGreyMaterial() {
-        XCTAssertTrue(BackgroundIntensity.standard.usesMaterial)
-        XCTAssertFalse(BackgroundIntensity.deepBlack.usesMaterial)     // pure black
+    func testOuterNotchSurfaceNeverUsesGreyMaterial() {
+        XCTAssertFalse(BackgroundIntensity.standard.usesMaterial)
+        XCTAssertFalse(BackgroundIntensity.deepBlack.usesMaterial)
         XCTAssertFalse(BackgroundIntensity.maxContrast.usesMaterial)
     }
-    func testDeepAndMaxHaveOpaqueBlackCorners() {
+    func testEveryIntensityHasOpaqueBlackCorners() {
+        XCTAssertTrue(BackgroundIntensity.standard.hasOpaqueBlackCorners)
         XCTAssertTrue(BackgroundIntensity.deepBlack.hasOpaqueBlackCorners)
         XCTAssertTrue(BackgroundIntensity.maxContrast.hasOpaqueBlackCorners)
-        XCTAssertFalse(BackgroundIntensity.standard.hasOpaqueBlackCorners)
     }
-    func testDeepAndMaxSurfaceFullyOpaqueAndNearBlack() {
+    func testEverySurfaceIsFullyOpaqueAndNearBlack() {
+        XCTAssertEqual(BackgroundIntensity.standard.surfaceOpacity, 1.0)
         XCTAssertEqual(BackgroundIntensity.deepBlack.surfaceOpacity, 1.0)
         XCTAssertEqual(BackgroundIntensity.maxContrast.surfaceOpacity, 1.0)
         XCTAssertLessThanOrEqual(BackgroundIntensity.deepBlack.surfaceWhite, 0.02)
