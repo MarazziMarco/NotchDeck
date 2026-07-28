@@ -86,9 +86,11 @@ final class NotchPanelController {
             .store(in: &cancellables)
 
         // Re-position when the live-activity layout changes so the compact strip
-        // widens/narrows to fit (e.g. timer + agents together).
+        // adopts the correct semantic footprint. Slot count alone is insufficient:
+        // Focus and urgent Agents can both use two slots but require different
+        // width, height, radius and physical-notch alignment.
         environment.liveActivity.$layout
-            .map { ($0.leading != nil ? 1 : 0) + ($0.trailing != nil ? 1 : 0) }
+            .map(CompactGeometrySignature.resolve)
             .removeDuplicates()
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.reposition(animated: true) }
@@ -149,6 +151,9 @@ final class NotchPanelController {
     /// than one; nothing active stays notch-tight.
     private func compactExtraWidth() -> CGFloat {
         let l = environment.liveActivity.layout
+        if let agent = l.compactAgentIndicator {
+            return CompactAgentIndicatorGeometry.extraWidth(for: agent)
+        }
         // Two wings need enough room that each side clears the camera housing and
         // the enlarged right-wing MM:SS (22pt "00:00" + notch-safe inset + trailing
         // padding) is never clipped or pushed under the housing. 210 → ~105pt per

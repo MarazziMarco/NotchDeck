@@ -5,11 +5,12 @@ import Combine
 enum LiveActivityPriority: Int, Comparable, Equatable {
     case approval = 0
     case input = 1
-    case timerCompleted = 2
-    case pomodoroRunning = 3
-    case agentsRunning = 4
-    case media = 5
-    case ambient = 6          // clipboard / low-signal defaults
+    case agentDelivery = 2
+    case timerCompleted = 3
+    case pomodoroRunning = 4
+    case agentsRunning = 5
+    case media = 6
+    case ambient = 7          // clipboard / low-signal defaults
     static func < (l: Self, r: Self) -> Bool { l.rawValue < r.rawValue }
 }
 
@@ -47,6 +48,10 @@ struct WingSlot: Equatable {
     /// When set, the slot renders the provider's logo/monogram instead of an SF
     /// symbol (used for the compact approval + active-agent states).
     var providerVendor: AgentVendor?
+    /// Typed, normalized Agents presentation. When present, generic symbol/text/
+    /// badge fields stay nil and `CompactAgentIndicatorView` owns the rendering.
+    var compactAgentIndicator: CompactAgentIndicatorModel?
+    var compactAgentAccent: AgentCompactAccent?
 }
 
 /// Where a compact-activity tap should expand to.
@@ -96,6 +101,10 @@ struct LiveActivityLayout: Equatable {
     var isFocusTimer: Bool {
         (leading?.progress != nil && trailing?.emphasize == true)
             || (trailing?.progress != nil && leading?.emphasize == true)
+    }
+
+    var compactAgentIndicator: CompactAgentIndicatorModel? {
+        leading?.compactAgentIndicator ?? trailing?.compactAgentIndicator
     }
 }
 

@@ -3,10 +3,7 @@ import XCTest
 
 final class LiveActivityResolveTests: XCTestCase {
     private func agentsRunning(count: Int = 1) -> ResolvedActivity {
-        ResolvedActivity(id: "agents", priority: .agentsRunning,
-                         slot: WingSlot(symbol: "cpu", tint: .running, pulse: true,
-                                        badge: count > 1 ? count : nil),
-                         preferredWing: .trailing, tapTarget: .face(.agents))
+        CompactAgentActivityFactory.make(for: .activeSessions(count: count))!
     }
     private func pomodoro() -> ResolvedActivity {
         ResolvedActivity(id: "pomodoro", priority: .pomodoroRunning,
@@ -35,7 +32,10 @@ final class LiveActivityResolveTests: XCTestCase {
     func testTimerAndAgentsUseSeparateWings() {
         let layout = LiveActivityCoordinator.resolve([pomodoro(), agentsRunning()])
         XCTAssertEqual(layout.leading?.symbol, "timer")   // pomodoro leading
-        XCTAssertEqual(layout.trailing?.symbol, "cpu")    // agents trailing
+        XCTAssertEqual(
+            layout.trailing?.compactAgentIndicator,
+            .activeSessions(count: 1)
+        )
     }
 
     func testPriorityOrder() {
@@ -46,9 +46,11 @@ final class LiveActivityResolveTests: XCTestCase {
         XCTAssertEqual(layout.leading?.symbol, "timer")
     }
 
-    func testMultipleAgentsShowCountBadge() {
+    func testMultipleAgentsUseOneTypedAggregateCount() {
         let layout = LiveActivityCoordinator.resolve([agentsRunning(count: 3)])
-        XCTAssertEqual(layout.trailing?.badge ?? layout.leading?.badge, 3)
+        XCTAssertEqual(layout.compactAgentIndicator, .activeSessions(count: 3))
+        XCTAssertNil(layout.trailing?.badge)
+        XCTAssertNil(layout.trailing?.text)
     }
 }
 
@@ -59,7 +61,7 @@ final class AgentsLiveSourceTests: XCTestCase {
         XCTAssertNil(store.currentActivity())   // inactive modules don't occupy compact
     }
 
-    func testRunningAgentsBadge() {
+    func testRunningAgentsUseOneNormalizedIndicator() {
         let store = AgentSessionStore(fileName: "la-\(UUID().uuidString).json")
         for i in 0..<3 {
             var s = AgentSession(provider: .codex, title: "s\(i)", projectPath: "/tmp", status: .running)
@@ -68,9 +70,9 @@ final class AgentsLiveSourceTests: XCTestCase {
         }
         let activity = store.currentActivity()
         XCTAssertEqual(activity?.priority, .agentsRunning)
-        // Redesigned compact: at most two logos, then +N. 3 running → badge = +1.
-        XCTAssertEqual(activity?.slot.badge, 1)
-        XCTAssertEqual(activity?.slot.text, "3 agents active")
+        XCTAssertEqual(activity?.slot.compactAgentIndicator, .activeSessions(count: 3))
+        XCTAssertNil(activity?.slot.badge)
+        XCTAssertNil(activity?.slot.text)
         XCTAssertEqual(activity?.preferredWing, .trailing)
     }
 

@@ -21,6 +21,10 @@ final class AgentsWorkspaceController {
         let mode: AgentPermissionHandlingMode
         let fallbackDelay: TimeInterval
     }
+    private struct CompactConfiguration: Equatable {
+        let display: CompactAgentsDisplay
+        let accent: AgentCompactAccent
+    }
 
     private let settings: SettingsStore
     private let agents: AgentCoordinator
@@ -64,6 +68,21 @@ final class AgentsWorkspaceController {
                         fallbackDelay: configuration.fallbackDelay
                     )
                 }
+            }
+            .store(in: &cancellables)
+
+        settings.$settings
+            .map {
+                CompactConfiguration(
+                    display: $0.compactAgentsDisplay,
+                    accent: $0.agentCompactAccent
+                )
+            }
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] configuration in
+                self?.store.compactDisplay = configuration.display
+                self?.store.compactAccent = configuration.accent
             }
             .store(in: &cancellables)
     }

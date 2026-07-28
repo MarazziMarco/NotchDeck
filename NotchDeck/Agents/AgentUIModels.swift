@@ -636,17 +636,6 @@ enum RecentSessionLimit: String, Codable, CaseIterable, Identifiable {
     var label: String { self == .off ? "Off" : "\(limit)" }
 }
 
-/// Pure compact-agents string/priority resolver. Elapsed is NEVER the default.
-struct AgentCompactModel: Equatable {
-    enum Kind: Int { case approval = 0, input = 1, active = 2, completed = 3 }
-    var kind: Kind
-    var text: String
-    var glyphVendors: [AgentVendor]   // up to two, then +N handled by view
-    var extraCount: Int               // N for "+N"
-    var attention: Bool
-    var exclusive: Bool
-}
-
 /// De-duplication of a plain external window against a connected bridge session
 /// by PID / TTY / project-title association.
 enum AgentSessionMerge {
@@ -663,65 +652,5 @@ enum AgentSessionMerge {
         if let title = external.externalWindowTitle, !connected.projectName.isEmpty,
            title.localizedCaseInsensitiveContains(connected.projectName) { return true }
         return false
-    }
-}
-
-/// Semantic compact-approval label chosen by available width — never character
-/// truncation. Widest→narrowest variants, dropping the overflow, then the
-/// countdown, then the word "approval".
-enum CompactApprovalLabel {
-    /// - remainingSeconds: countdown to terminal fallback (nil when none).
-    /// - availableWidth: right-wing width already net of notch inset / paddings.
-    static func text(vendor: AgentVendor, remainingSeconds: Int?, availableWidth: CGFloat) -> String {
-        let name = vendor.shortName
-        // Ideal: "Claude approval" needs the most room.
-        if availableWidth >= 120 { return "\(name) approval" }
-        // Countdown variant: "Claude · 7s".
-        if let s = remainingSeconds, availableWidth >= 78 { return "\(name) · \(s)s" }
-        // Narrowest whole variant: just the provider name (never a fragment).
-        return name
-    }
-}
-
-enum AgentCompactActivity {
-    /// - approval/input/completed: the single most relevant session, if any.
-    static func resolve(activeVendors: [AgentVendor],
-                        approvalVendor: AgentVendor?, inputVendor: AgentVendor?,
-                        completedProject: String?,
-                        display: CompactAgentsDisplay,
-                        elapsedText: String?) -> AgentCompactModel? {
-        if let v = approvalVendor {
-            return AgentCompactModel(kind: .approval, text: "\(v.displayName) needs approval",
-                                     glyphVendors: [v], extraCount: 0, attention: true, exclusive: true)
-        }
-        if let v = inputVendor {
-            return AgentCompactModel(kind: .input, text: "Input needed",
-                                     glyphVendors: [v], extraCount: 0, attention: true, exclusive: true)
-        }
-        if !activeVendors.isEmpty {
-            if display == .hidden { return nil }
-            let shown = Array(activeVendors.prefix(2))
-            let extra = max(0, activeVendors.count - shown.count)
-            let text: String
-            switch display {
-            case .activeCount:
-                text = activeVendors.count == 1 ? "\(activeVendors[0].displayName) active"
-                                                : "\(activeVendors.count) agents active"
-            case .providerStatus:
-                text = activeVendors.count == 1 ? "\(activeVendors[0].displayName) running"
-                                                : "\(activeVendors.count) running"
-            case .elapsed:
-                text = elapsedText ?? "\(activeVendors.count) active"
-            case .hidden:
-                return nil
-            }
-            return AgentCompactModel(kind: .active, text: text, glyphVendors: shown,
-                                     extraCount: extra, attention: false, exclusive: false)
-        }
-        if let project = completedProject {
-            return AgentCompactModel(kind: .completed, text: "\(project) done",
-                                     glyphVendors: [], extraCount: 0, attention: false, exclusive: false)
-        }
-        return nil
     }
 }
