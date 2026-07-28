@@ -20,6 +20,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Socket availability is an application lifecycle invariant, independent
         // of installed-hook preference flags and independent of every view.
         Task { await environment.terminalBridge.start() }
+        Task.detached {
+            do {
+                _ = try HookInstaller.ensureHelperInstalled(force: false)
+            } catch {
+                Log.agents.error("helper bootstrap failed: \(error.localizedDescription)")
+            }
+        }
 
         // Dock icon hidden by default; a diagnostics toggle can show it.
         NSApp.setActivationPolicy(environment.settings.settings.showDockIcon ? .regular : .accessory)

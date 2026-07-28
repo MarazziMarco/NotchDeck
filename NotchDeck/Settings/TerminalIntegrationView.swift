@@ -148,7 +148,6 @@ struct TerminalIntegrationView: View {
 
     private func preview(_ provider: TerminalAgentProvider) {
         do {
-            _ = try HookInstaller.ensureHelperInstalled()
             previewProvider = provider
             previewText = try HookInstaller.preview(provider)
         } catch { message = error.localizedDescription }

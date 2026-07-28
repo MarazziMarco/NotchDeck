@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Darwin
 
 /// Installs / removes NotchDeck's terminal hooks for Codex and Claude Code.
 /// Conservative and reversible: never deletes the user's own hooks, always
@@ -22,10 +23,12 @@ enum HookInstaller {
 
     enum HookError: LocalizedError {
         case helperMissing
+        case helperInstallFailed(String)
         case writeFailed(String)
         var errorDescription: String? {
             switch self {
             case .helperMissing: return "The notchdeck-agent-hook helper could not be located in the app bundle."
+            case .helperInstallFailed(let d): return "Failed to install notchdeck-agent-hook: \(d)"
             case .writeFailed(let d): return "Failed to write hook configuration: \(d)"
             }
         }
@@ -52,7 +55,39 @@ enum HookInstaller {
     // MARK: Helper install
 
     static var installedHelperURL: URL {
-        AppPaths.supportDirectory.appendingPathComponent("notchdeck-agent-hook")
+        resolveInstalledHelperURL(
+            referencedCommands: installedManagedCommandStrings(),
+            supportDirectory: AppPaths.supportDirectory
+        )
+    }
+
+    static func resolveInstalledHelperURL(
+        referencedCommands: [String],
+        supportDirectory: URL
+    ) -> URL {
+        let legacy = supportDirectory.appendingPathComponent("notchdeck-agent-hook")
+        let canonical = supportDirectory
+            .appendingPathComponent("bin", isDirectory: true)
+            .appendingPathComponent("notchdeck-agent-hook")
+
+        // Existing hook command strings are authoritative. Keeping the legacy
+        // binary alive avoids breaking already-reviewed Codex hook identities.
+        if referencedCommands.contains(where: { $0.contains(legacy.path) }) {
+            return legacy
+        }
+        return canonical
+    }
+
+    static func versionURL(for helperURL: URL) -> URL {
+        helperURL.appendingPathExtension("version")
+    }
+
+    static var expectedHelperVersion: String {
+        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+            as? String ?? "0"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion")
+            as? String ?? "0"
+        return "\(short)-\(build)-hook\(managedHookVersion)"
     }
 
     static func bundledHelperURL() -> URL? {
@@ -68,13 +103,57 @@ enum HookInstaller {
 
     /// Copy the helper into Application Support and make it executable.
     @discardableResult
-    static func ensureHelperInstalled() throws -> URL {
+    static func ensureHelperInstalled(force: Bool? = nil) throws -> URL {
         guard let source = bundledHelperURL() else { throw HookError.helperMissing }
         let dest = installedHelperURL
-        try? FileManager.default.removeItem(at: dest)
-        try FileManager.default.copyItem(at: source, to: dest)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dest.path)
+        let defaultForce = false
+        _ = try installHelper(
+            from: source,
+            to: dest,
+            expectedVersion: expectedHelperVersion,
+            force: force ?? defaultForce
+        )
         return dest
+    }
+
+    /// Installs by version and executable state, never by build hash. Returns
+    /// false without touching either file when the installed helper is current.
+    @discardableResult
+    static func installHelper(
+        from source: URL,
+        to destination: URL,
+        expectedVersion: String,
+        force: Bool
+    ) throws -> Bool {
+        let fm = FileManager.default
+        let version = versionURL(for: destination)
+        let installedVersion = try? String(contentsOf: version)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let current = fm.fileExists(atPath: destination.path)
+            && fm.isExecutableFile(atPath: destination.path)
+            && installedVersion == expectedVersion
+        guard force || !current else { return false }
+
+        do {
+            try fm.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            let temporary = destination.deletingLastPathComponent()
+                .appendingPathComponent(".notchdeck-agent-hook-\(UUID().uuidString).tmp")
+            defer { try? fm.removeItem(at: temporary) }
+            try fm.copyItem(at: source, to: temporary)
+            try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: temporary.path)
+            guard rename(temporary.path, destination.path) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            try Data("\(expectedVersion)\n".utf8).write(to: version, options: .atomic)
+            try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: version.path)
+            return true
+        } catch {
+            throw HookError.helperInstallFailed(error.localizedDescription)
+        }
     }
 
     // MARK: Config locations
@@ -86,6 +165,27 @@ enum HookInstaller {
         case .claudeCode: return home.appendingPathComponent(".claude/settings.json")
         case .unknown: return home.appendingPathComponent(".notchdeck/unknown.json")
         }
+    }
+
+    private static func installedManagedCommandStrings() -> [String] {
+        [.codex, .claudeCode].flatMap { provider in
+            collectCommandStrings(loadJSON(configURL(for: provider)))
+                .filter { $0.contains(marker) }
+        }
+    }
+
+    private static func collectCommandStrings(_ value: Any) -> [String] {
+        if let dictionary = value as? [String: Any] {
+            var commands: [String] = []
+            if let command = dictionary["command"] as? String {
+                commands.append(command)
+            }
+            return commands + dictionary.values.flatMap(collectCommandStrings)
+        }
+        if let array = value as? [Any] {
+            return array.flatMap(collectCommandStrings)
+        }
+        return []
     }
 
     /// The event → command entries NotchDeck adds, keyed by the provider's hook

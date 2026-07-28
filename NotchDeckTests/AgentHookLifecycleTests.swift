@@ -3,6 +3,85 @@ import Darwin
 @testable import NotchDeck
 
 final class AgentHookLifecycleTests: XCTestCase {
+    func testHelperResolutionUsesBinForCleanInstallAndPreservesReferencedLegacyPath() {
+        let support = URL(fileURLWithPath: "/tmp/NotchDeck", isDirectory: true)
+        let canonical = support.appendingPathComponent("bin/notchdeck-agent-hook").path
+        let legacy = support.appendingPathComponent("notchdeck-agent-hook").path
+
+        XCTAssertEqual(
+            HookInstaller.resolveInstalledHelperURL(
+                referencedCommands: [],
+                supportDirectory: support
+            ).path,
+            canonical
+        )
+        XCTAssertEqual(
+            HookInstaller.resolveInstalledHelperURL(
+                referencedCommands: [
+                    "\"\(legacy)\" --provider codex --event permissionRequested"
+                ],
+                supportDirectory: support
+            ).path,
+            legacy
+        )
+    }
+
+    func testVersionedHelperInstallDoesNotRewriteEquivalentExecutable() throws {
+        let directory = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("nd-helper-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("source")
+        let destination = directory.appendingPathComponent("bin/notchdeck-agent-hook")
+        try Data("helper-v1".utf8).write(to: source)
+
+        XCTAssertTrue(try HookInstaller.installHelper(
+            from: source,
+            to: destination,
+            expectedVersion: "1.2.3-hook5",
+            force: false
+        ))
+        let attributesBefore = try FileManager.default.attributesOfItem(atPath: destination.path)
+        let modifiedBefore = try XCTUnwrap(attributesBefore[.modificationDate] as? Date)
+
+        XCTAssertFalse(try HookInstaller.installHelper(
+            from: source,
+            to: destination,
+            expectedVersion: "1.2.3-hook5",
+            force: false
+        ))
+        let attributesAfter = try FileManager.default.attributesOfItem(atPath: destination.path)
+        XCTAssertEqual(attributesAfter[.modificationDate] as? Date, modifiedBefore)
+        XCTAssertEqual(
+            try String(contentsOf: HookInstaller.versionURL(for: destination)),
+            "1.2.3-hook5\n"
+        )
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: destination.path))
+    }
+
+    func testVersionedHelperInstallRepairsVersionAndExecutableState() throws {
+        let directory = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("nd-helper-repair-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("source")
+        let destination = directory.appendingPathComponent("notchdeck-agent-hook")
+        try Data("new-helper".utf8).write(to: source)
+        try Data("old-helper".utf8).write(to: destination)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: destination.path)
+        try Data("old-version\n".utf8).write(to: HookInstaller.versionURL(for: destination))
+
+        XCTAssertTrue(try HookInstaller.installHelper(
+            from: source,
+            to: destination,
+            expectedVersion: "new-version",
+            force: false
+        ))
+        XCTAssertEqual(try String(contentsOf: destination), "new-helper")
+        XCTAssertEqual(try String(contentsOf: HookInstaller.versionURL(for: destination)), "new-version\n")
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: destination.path))
+    }
+
     func testSocketBootstrapReplacesStaleFilesystemEntry() throws {
         let directory = URL(fileURLWithPath: "/tmp", isDirectory: true)
             .appendingPathComponent("nd-stale-\(UUID().uuidString.prefix(8))", isDirectory: true)
