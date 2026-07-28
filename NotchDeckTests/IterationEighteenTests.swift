@@ -25,25 +25,22 @@ final class TimeoutHierarchyTests: XCTestCase {
     }
 }
 
-// MARK: Compact approval semantic label
+// MARK: Compact approval semantics
 
-final class CompactApprovalLabelTests: XCTestCase {
-    func testWideUsesApprovalWord() {
-        XCTAssertEqual(CompactApprovalLabel.text(vendor: .claudeCode, remainingSeconds: 7, availableWidth: 140),
-                       "Claude approval")
+final class CompactApprovalSemanticTests: XCTestCase {
+    func testApprovalUsesStateInsteadOfProviderName() {
+        let model = CompactAgentIndicatorModel.approvalRequired(count: 1)
+        XCTAssertEqual(model.conciseLabel, "Approval")
+        XCTAssertEqual(model.compactCountText, "1")
+        XCTAssertFalse(model.accessibilityLabel.contains("Claude"))
+        XCTAssertFalse(model.accessibilityLabel.contains("Codex"))
     }
-    func testMediumUsesCountdown() {
-        XCTAssertEqual(CompactApprovalLabel.text(vendor: .claudeCode, remainingSeconds: 7, availableWidth: 90),
-                       "Claude · 7s")
-    }
-    func testNarrowUsesWholeNameNotFragment() {
-        let t = CompactApprovalLabel.text(vendor: .claudeCode, remainingSeconds: 7, availableWidth: 50)
-        XCTAssertEqual(t, "Claude")
-        XCTAssertFalse(t.contains("…"))
-        XCTAssertFalse(t.contains("Cod"))   // never "Claude Cod..."
-    }
-    func testCodexVariant() {
-        XCTAssertEqual(CompactApprovalLabel.text(vendor: .codex, remainingSeconds: nil, availableWidth: 90), "Codex")
+
+    func testApprovalNeverProducesTruncatedFragments() {
+        let model = CompactAgentIndicatorModel.approvalRequired(count: 12)
+        XCTAssertEqual(model.compactCountText, "9+")
+        XCTAssertFalse(model.conciseLabel?.contains("…") ?? true)
+        XCTAssertFalse(model.conciseLabel?.contains("...") ?? true)
     }
 }
 

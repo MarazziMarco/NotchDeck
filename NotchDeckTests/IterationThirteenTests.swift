@@ -231,9 +231,7 @@ final class CompactPomodoroCountdownTests: XCTestCase {
             splitTrailing: WingSlot(text: mmss, tint: .running, monospacedDigits: true, emphasize: true))
     }
     private func agent() -> ResolvedActivity {
-        ResolvedActivity(id: "agents", priority: .agentsRunning,
-                         slot: WingSlot(symbol: "sparkles", tint: .running),
-                         preferredWing: .trailing, tapTarget: .face(.agents))
+        CompactAgentActivityFactory.make(for: .activeSessions(count: 1))!
     }
 
     func testRunningTimerSelectsPomodoroSplit() {
@@ -249,13 +247,12 @@ final class CompactPomodoroCountdownTests: XCTestCase {
         XCTAssertTrue(layout.trailing?.emphasize == true)
     }
 
-    func testCountdownStaysVisibleWithRunningAgent() {
-        // With an agent also active the Pomodoro collapses to one wing but keeps
-        // the MM:SS; the agent takes the other wing.
+    func testCountdownKeepsProtectedSplitWhileOrdinaryAgentIsSuppressed() {
         let layout = LiveActivityCoordinator.resolve([pomodoro("12:00"), agent()])
-        XCTAssertEqual(layout.leading?.text, "12:00")            // countdown still present
+        XCTAssertNil(layout.leading?.text)
         XCTAssertEqual(layout.leading?.symbol, "timer")
-        XCTAssertEqual(layout.trailing?.symbol, "sparkles")      // agent in the other wing
+        XCTAssertEqual(layout.trailing?.text, "12:00")
+        XCTAssertNil(layout.trailing?.symbol)
     }
 
     func testRightWingReservesWidthForFiveChars() {

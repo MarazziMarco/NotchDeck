@@ -16,20 +16,16 @@ enum BackgroundIntensity: String, Codable, CaseIterable, Identifiable {
     var surfaceWhite: Double {
         switch self { case .standard: return 0.055; case .deepBlack: return 0.018; case .maxContrast: return 0.0 }
     }
-    /// Opacity of the surface over the material (higher = less grey haze).
-    /// Deep Black is fully opaque so the rounded corners read pure black with no
-    /// grey material bleed; Standard keeps a slight translucency by choice.
+    /// The one authoritative notch surface is always opaque. Intensity changes
+    /// only its near-black white level, never host/material visibility.
     var surfaceOpacity: Double {
-        switch self { case .standard: return 0.90; case .deepBlack: return 1.0; case .maxContrast: return 1.0 }
+        1.0
     }
-    /// Whether to draw the translucent grey material behind the fill. ONLY
-    /// Standard uses it (it is translucent by design). Deep Black and Max
-    /// Contrast render a pure opaque near-black surface so the rounded lower
-    /// corners never show a grey material fringe.
-    var usesMaterial: Bool { self == .standard }
+    /// Materials are intentionally excluded from the outer notch surface because
+    /// they create a wallpaper-dependent grey layer at the rounded edge.
+    var usesMaterial: Bool { false }
     var surfaceColor: Color { Color(white: surfaceWhite) }
-    /// True when the base is fully opaque near-black — corners guaranteed black.
-    var hasOpaqueBlackCorners: Bool { self != .standard }
+    var hasOpaqueBlackCorners: Bool { true }
 }
 
 /// Mirror preview orientation. Default is a true mirror (horizontally flipped,

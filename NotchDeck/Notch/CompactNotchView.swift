@@ -22,15 +22,30 @@ struct CompactNotchView: View {
     }
 
     @ViewBuilder private var leadingView: some View {
-        if let slot = current.leading { WingSlotView(slot: slot) }
+        if let slot = current.leading {
+            WingSlotView(
+                slot: slot,
+                reduceMotion: appState.reduceMotion,
+                activateAgent: { appState.expand(face: .agents) }
+            )
+        }
     }
     @ViewBuilder private var trailingView: some View {
-        if let slot = current.trailing { WingSlotView(slot: slot) }
+        if let slot = current.trailing {
+            WingSlotView(
+                slot: slot,
+                reduceMotion: appState.reduceMotion,
+                activateAgent: { appState.expand(face: .agents) }
+            )
+        }
     }
 
     /// Clicking a compact live activity expands the relevant face/module — but
     /// NEVER pins the panel.
     private func handleTap() {
+        guard CompactNotchInteractionPolicy.containerHandlesTap(for: current) else {
+            return
+        }
         switch current.tapTarget {
         case .face(let face):
             appState.expand(face: face)
@@ -45,7 +60,22 @@ struct CompactNotchView: View {
     // MARK: Wings
 
     @ViewBuilder private func wings<L: View, T: View>(leading: L, trailing: T) -> some View {
-        if layout.hasNotch && layout.compactFocus {
+        if layout.hasNotch && current.compactAgentIndicator != nil {
+            // Stable symmetric footprint with all padding *inside* each fixed wing.
+            // This keeps the physical-notch exclusion centred and gives the typed
+            // indicator a truthful width proposal for ViewThatFits.
+            HStack(spacing: 0) {
+                leading
+                    .padding(.leading, CompactAgentIndicatorGeometry.outerEdgeInset)
+                    .padding(.trailing, CompactAgentIndicatorGeometry.notchSafeInset)
+                    .frame(width: CompactAgentIndicatorGeometry.wingWidth)
+                Color.clear.frame(width: layout.housingWidth)
+                trailing
+                    .padding(.leading, CompactAgentIndicatorGeometry.notchSafeInset)
+                    .padding(.trailing, CompactAgentIndicatorGeometry.outerEdgeInset)
+                    .frame(width: CompactAgentIndicatorGeometry.wingWidth)
+            }
+        } else if layout.hasNotch && layout.compactFocus {
             // Dedicated compact FOCUS layout: content-driven asymmetric wings. The
             // timer icon hugs the outer-left edge (no big centred left container);
             // the time label sits just past the notch-safe inset on the right.
@@ -192,11 +222,19 @@ enum CompactTimerLayout {
 /// text, optional numeric badge, optional pulse.
 struct WingSlotView: View {
     let slot: WingSlot
+    var reduceMotion: Bool = false
+    var activateAgent: () -> Void = {}
     @State private var pulsing = false
 
     var body: some View {
         HStack(spacing: 6) {
-            if let vendor = slot.providerVendor {
+            if let model = slot.compactAgentIndicator {
+                CompactAgentIndicatorView(
+                    model: model,
+                    accent: slot.compactAgentAccent ?? .orange,
+                    activate: activateAgent
+                )
+            } else if let vendor = slot.providerVendor {
                 AgentProviderLogo(appearance: AgentProviderAppearanceRegistry.appearance(vendor),
                                   size: CompactTimerLayout.providerLogoSize)
                     .overlay(alignment: .topTrailing) {
@@ -244,11 +282,14 @@ struct WingSlotView: View {
             }
         }
         .onAppear {
-            if slot.pulse {
+            if slot.pulse && !reduceMotion {
                 withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
                     pulsing = true
                 }
             }
+        }
+        .onChange(of: reduceMotion) { _, reduced in
+            if reduced { pulsing = false }
         }
     }
 }

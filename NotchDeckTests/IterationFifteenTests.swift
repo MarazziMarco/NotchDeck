@@ -228,33 +228,40 @@ final class CompactAgentsTests: XCTestCase {
         XCTAssertEqual(AppSettings().compactAgentsDisplay, .activeCount)
         XCTAssertEqual(AppSettings().agentCompactAccent, .orange)
     }
-    func testSingleActiveString() {
-        let m = AgentCompactActivity.resolve(activeVendors: [.claudeCode], approvalVendor: nil,
-                                             inputVendor: nil, completedProject: nil,
-                                             display: .activeCount, elapsedText: "5m")
-        XCTAssertEqual(m?.text, "Claude Code active")
-        XCTAssertEqual(m?.kind, .active)
+    func testSingleActiveIsProviderNeutral() {
+        let model = CompactAgentIndicatorModel.resolve(
+            CompactAgentIndicatorInputs(activeSessionCount: 1)
+        )
+        XCTAssertEqual(model, .activeSessions(count: 1))
+        XCTAssertFalse(model.accessibilityLabel.contains("Claude"))
     }
-    func testMultipleActiveString() {
-        let m = AgentCompactActivity.resolve(activeVendors: [.claudeCode, .codex, .gemini],
-                                             approvalVendor: nil, inputVendor: nil, completedProject: nil,
-                                             display: .activeCount, elapsedText: nil)
-        XCTAssertEqual(m?.text, "3 agents active")
-        XCTAssertEqual(m?.glyphVendors.count, 2)          // at most two logos
-        XCTAssertEqual(m?.extraCount, 1)                  // +1
+    func testMultipleActiveUsesOneAggregate() {
+        let model = CompactAgentIndicatorModel.resolve(
+            CompactAgentIndicatorInputs(activeSessionCount: 3)
+        )
+        XCTAssertEqual(model, .activeSessions(count: 3))
+        XCTAssertEqual(model.compactCountText, "3")
     }
     func testApprovalTakesPriority() {
-        let m = AgentCompactActivity.resolve(activeVendors: [.codex], approvalVendor: .claudeCode,
-                                             inputVendor: nil, completedProject: nil,
-                                             display: .activeCount, elapsedText: nil)
-        XCTAssertEqual(m?.kind, .approval)
-        XCTAssertTrue(m?.exclusive == true)
-        XCTAssertEqual(m?.text, "Claude Code needs approval")
+        let model = CompactAgentIndicatorModel.resolve(
+            CompactAgentIndicatorInputs(
+                activeSessionCount: 2,
+                pendingApprovalCount: 1,
+                inputRequiredCount: 1
+            )
+        )
+        XCTAssertEqual(model, .approvalRequired(count: 1))
     }
-    func testHiddenDisplayReturnsNilForActive() {
-        XCTAssertNil(AgentCompactActivity.resolve(activeVendors: [.codex], approvalVendor: nil,
-                                                  inputVendor: nil, completedProject: nil,
-                                                  display: .hidden, elapsedText: nil))
+    func testHiddenDisplaySuppressesActive() {
+        XCTAssertEqual(
+            CompactAgentIndicatorModel.resolve(
+                CompactAgentIndicatorInputs(
+                    activeSessionCount: 1,
+                    displayPreference: .hidden
+                )
+            ),
+            .hidden
+        )
     }
 }
 

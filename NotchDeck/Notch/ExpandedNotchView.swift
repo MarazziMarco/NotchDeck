@@ -81,7 +81,10 @@ struct ExpandedNotchView: View {
     }
 
     private var dropHighlight: some View {
-        RoundedRectangle(cornerRadius: DesignTokens.Metrics.expandedCornerRadius)
+        BottomRoundedShape(radius: NotchSurfaceGeometry.cornerRadius(
+            presentation: .expanded,
+            compactFocus: false
+        ))
             .strokeBorder(DesignTokens.Palette.statusRunning,
                           lineWidth: isDropTargeted ? 2 : 0)
             .animation(.easeOut(duration: 0.15), value: isDropTargeted)

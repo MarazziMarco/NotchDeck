@@ -8,15 +8,27 @@ final class AgentSessionStore: ObservableObject, LiveActivitySource {
     @Published private(set) var sessions: [AgentSession] = []
 
     // Compact live-activity configuration (set from settings).
-    var compactDisplay: CompactAgentsDisplay = .activeCount
-    var compactAccent: AgentCompactAccent = .orange
+    var compactDisplay: CompactAgentsDisplay = .activeCount {
+        didSet {
+            if compactDisplay != oldValue { objectWillChange.send() }
+        }
+    }
+    var compactAccent: AgentCompactAccent = .orange {
+        didSet {
+            if compactAccent != oldValue { objectWillChange.send() }
+        }
+    }
     var recentLimit: RecentSessionLimit = .ten
     var showFailed: Bool = true
     var showExternal: Bool = true
     var completionActivitySeconds: Double = 8
     /// When the Agents module is disabled, the store keeps its data (history is
     /// preserved) but contributes NO compact live activity to the notch.
-    var compactSuppressed: Bool = false
+    var compactSuppressed: Bool = false {
+        didSet {
+            if compactSuppressed != oldValue { objectWillChange.send() }
+        }
+    }
 
     private let store: JSONFileStore<[AgentSession]>
 
@@ -88,69 +100,14 @@ final class AgentSessionStore: ObservableObject, LiveActivitySource {
         MainActor.assumeIsolated {
             // Agents disabled → no compact agent state ever reaches the notch.
             guard !compactSuppressed else { return nil }
-            let now = Date()
             let active = activeSessions
-            // Genuine approval requires a LIVE PendingApproval (not mere activity).
-            let approvalSession = active.first { $0.hasLiveApproval }
-            let inputSession = active.first { $0.status == .waitingForInput }
-            let running = active.filter { [.running, .starting].contains($0.status) }
-            let completed = orderedSessions.first {
-                $0.status == .completed && now.timeIntervalSince($0.lastActivityAt) < completionActivitySeconds
-            }
-
-            let elapsed = running.first.map { Self.elapsed($0) }
-            guard let model = AgentCompactActivity.resolve(
-                activeVendors: running.map(\.vendor),
-                approvalVendor: approvalSession?.vendor,
-                inputVendor: inputSession?.vendor,
-                completedProject: completed?.projectName,
-                display: compactDisplay,
-                elapsedText: elapsed) else { return nil }
-
-            let ordinaryTint: StatusTint = compactAccent == .orange ? .agentActive : .neutral
-            let glyph = model.glyphVendors.first?.fallbackSymbol ?? "cpu"
-            let badge = model.extraCount > 0 ? model.extraCount : nil
-
-            switch model.kind {
-            case .approval:
-                // Provider logo (left) + concise semantic label (right), chosen by
-                // width — never a truncated fragment. Includes the fallback
-                // countdown when known.
-                let vendor = approvalSession?.vendor ?? .unknown
-                let remaining = approvalSession?.approval?.fallbackRemaining(now: now).map { Int($0.rounded(.up)) }
-                let label = CompactApprovalLabel.text(vendor: vendor, remainingSeconds: remaining, availableWidth: 76)
-                return ResolvedActivity(
-                    id: "agents", priority: .approval,
-                    slot: WingSlot(tint: .approval, pulse: true, providerVendor: vendor),
-                    preferredWing: .leading, attention: true,
-                    tapTarget: .face(.agents), exclusive: true, exclusiveLabel: label)
-            case .input:
-                return ResolvedActivity(
-                    id: "agents", priority: .input,
-                    slot: WingSlot(symbol: glyph, tint: .attention, pulse: true),
-                    preferredWing: .leading, attention: true,
-                    tapTarget: .face(.agents), exclusive: true, exclusiveLabel: "Input needed")
-            case .active:
-                return ResolvedActivity(
-                    id: "agents", priority: .agentsRunning,
-                    slot: WingSlot(symbol: glyph, text: model.text, tint: ordinaryTint,
-                                   pulse: true, badge: badge),
-                    preferredWing: .trailing, tapTarget: .face(.agents))
-            case .completed:
-                return ResolvedActivity(
-                    id: "agents", priority: .agentsRunning,
-                    slot: WingSlot(symbol: "checkmark.circle.fill",
-                                   text: String(model.text.prefix(16)), tint: .success),
-                    preferredWing: .trailing, tapTarget: .face(.agents))
-            }
+            let inputs = CompactAgentIndicatorInputs.resolve(
+                activeSessions: active,
+                displayPreference: compactDisplay
+            )
+            let model = CompactAgentIndicatorModel.resolve(inputs)
+            return CompactAgentActivityFactory.make(for: model, accent: compactAccent)
         }
-    }
-
-    private static func elapsed(_ s: AgentSession) -> String {
-        let secs = Int(Date().timeIntervalSince(s.startedAt))
-        if secs < 60 { return "\(secs)s" }
-        if secs < 3600 { return "\(secs / 60)m" }
-        return "\(secs / 3600)h"
     }
 
     func upsert(_ session: AgentSession) {

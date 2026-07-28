@@ -68,17 +68,33 @@ final class ClosedNotchGeometryTests: XCTestCase {
         XCTAssertEqual(l.panelFrame.height, 300 + reserve, accuracy: 0.5)
     }
 
-    // MARK: Grey chrome removed for compact / idle
+    // MARK: One clean surface in compact and expanded states
 
     func testCompactHasNoBorder() {
-        XCTAssertEqual(CompactChrome.compactBorderWidth, 0)
+        let surface = NotchSurfaceDescriptor.resolve(
+            presentation: .compact,
+            compactFocus: false,
+            intensity: .deepBlack
+        )
+        XCTAssertEqual(surface.borderWidth, 0)
     }
     func testCompactHasNoShadow() {
-        XCTAssertEqual(CompactChrome.compactShadowRadius, 0)
+        let surface = NotchSurfaceDescriptor.resolve(
+            presentation: .compact,
+            compactFocus: false,
+            intensity: .deepBlack
+        )
+        XCTAssertEqual(surface.shadowRadius, 0)
     }
-    func testExpandedKeepsChrome() {
-        XCTAssertGreaterThan(CompactChrome.expandedBorderWidth, 0)
-        XCTAssertGreaterThan(CompactChrome.expandedShadowRadius, 0)
+    func testExpandedHasNoInBoundsChromeLayer() {
+        let surface = NotchSurfaceDescriptor.resolve(
+            presentation: .expanded,
+            compactFocus: false,
+            intensity: .deepBlack
+        )
+        XCTAssertEqual(surface.borderWidth, 0)
+        XCTAssertEqual(surface.shadowRadius, 0)
+        XCTAssertEqual(surface.backgroundLayerCount, 1)
     }
 
     // MARK: Panel window has no shadow while closed

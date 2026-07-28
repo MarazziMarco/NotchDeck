@@ -36,13 +36,31 @@ final class LiveActivityCoordinator: ObservableObject {
     /// - An exclusive activity (approval/input) takes the whole strip.
     /// - Otherwise the highest-priority activity fills its preferred wing, and the
     ///   next-highest activity that prefers the OTHER wing fills that one — so a
-    ///   running Pomodoro (leading) and running agents (trailing) show together
-    ///   instead of one hiding the other.
+    ///   second compatible activity can coexist.
+    /// - The full compact Focus timer suppresses ordinary agent-presence counts.
+    ///   Actionable Agents states remain exclusive and replace the timer.
     nonisolated static func resolve(_ activities: [ResolvedActivity]) -> LiveActivityLayout {
-        let sorted = activities.sorted { $0.priority < $1.priority }
+        let hasFocusTimer = activities.contains {
+            $0.splitLeading?.progress != nil && $0.splitTrailing?.emphasize == true
+        }
+        let eligible = activities.filter { activity in
+            guard hasFocusTimer,
+                  case .activeSessions? = activity.slot.compactAgentIndicator else {
+                return true
+            }
+            return false
+        }
+        let sorted = eligible.sorted { $0.priority < $1.priority }
         guard let primary = sorted.first else { return .empty }
 
         if primary.exclusive {
+            if primary.slot.compactAgentIndicator != nil {
+                return LiveActivityLayout(
+                    trailing: primary.slot,
+                    attention: true,
+                    tapTarget: primary.tapTarget
+                )
+            }
             var leading = primary.slot
             leading.pulse = false
             let trailing = WingSlot(text: primary.exclusiveLabel ?? "Allow?", tint: .attention)
