@@ -58,7 +58,9 @@ enum HookInstaller {
     /// v4: provider-specific PermissionRequest decision contract; PreToolUse is
     ///     enrichment only.
     /// v5: per-helper transaction identity prevents cross-session socket reuse.
-    static let managedHookVersion = 5
+    /// v6: Codex entries use the documented top-level `hooks` container and
+    ///     omit private fields rejected by Codex's strict config decoder.
+    static let managedHookVersion = 6
     static let managedVersionKey = "notchdeckHookVersion"
 
     // MARK: Helper install
@@ -300,6 +302,12 @@ enum HookInstaller {
         guard managed.count == 1, let inner = (managed[0]["hooks"] as? [[String: Any]])?.first else { return false }
         if inner["async"] != nil { return false }
         guard (inner["timeout"] as? Int) == HookTimeouts.claudeHookTimeoutSeconds else { return false }
+        if provider == .codex {
+            // Codex rejects private marker/version fields in handlers. The
+            // stable command path plus exact semantic comparison is the
+            // managed identity for this provider.
+            return (inner["command"] as? String)?.contains(marker) == true
+        }
         // A stale response-schema/timeout install lacks the current version marker.
         return (inner[managedVersionKey] as? Int) == managedHookVersion
     }
@@ -455,6 +463,9 @@ enum HookInstaller {
     static func mergeHooks(base: [String: Any], provider: TerminalAgentProvider,
                            helper: String) -> [String: Any] {
         var json = base
+        if provider == .codex {
+            removeLegacyTopLevelCodexEntries(from: &json)
+        }
         var hooks = hooksDictionary(json, provider: provider) ?? [:]
         // Retire obsolete NotchDeck events too, not only events that still exist
         // in the current schema.
@@ -467,12 +478,18 @@ enum HookInstaller {
             let cmd = command(helper: helper, provider: provider, event: spec.event)
             // PermissionRequest must be SYNCHRONOUS: no `async`, and a timeout
             // longer than the app's 8s UI fallback so the user has time to choose.
-            var hookDict: [String: Any] = ["type": "command", "command": cmd, managedKey: true,
-                                           managedVersionKey: managedHookVersion]
+            var hookDict: [String: Any] = ["type": "command", "command": cmd]
+            if provider != .codex {
+                hookDict[managedKey] = true
+                hookDict[managedVersionKey] = managedHookVersion
+            }
             if spec.event == .permissionRequested {
                 hookDict["timeout"] = HookTimeouts.claudeHookTimeoutSeconds
             }
-            var entry: [String: Any] = ["hooks": [hookDict], managedKey: true]
+            var entry: [String: Any] = ["hooks": [hookDict]]
+            if provider != .codex {
+                entry[managedKey] = true
+            }
             if spec.matcher { entry["matcher"] = "*" }
             var array = (hooks[spec.hookEvent] as? [[String: Any]]) ?? []
             array.append(entry)
@@ -487,6 +504,9 @@ enum HookInstaller {
         provider: TerminalAgentProvider,
         helper: String
     ) -> Bool {
+        if provider == .codex, hasLegacyTopLevelCodexMarker(in: json) {
+            return false
+        }
         guard let actualHooks = hooksDictionary(json, provider: provider) else { return false }
         let desiredJSON = mergeHooks(base: [:], provider: provider, helper: helper)
         guard let desiredHooks = hooksDictionary(desiredJSON, provider: provider) else { return false }
@@ -512,6 +532,9 @@ enum HookInstaller {
     /// Pure removal: strip every NotchDeck-added hook entry, leaving the user's.
     static func removeHooks(base: [String: Any], provider: TerminalAgentProvider) -> [String: Any] {
         var json = base
+        if provider == .codex {
+            removeLegacyTopLevelCodexEntries(from: &json)
+        }
         guard var hooks = hooksDictionary(json, provider: provider) else { return json }
         for (key, value) in hooks {
             guard var array = value as? [[String: Any]] else { continue }
@@ -524,9 +547,39 @@ enum HookInstaller {
 
     /// Whether `json` already contains NotchDeck hook entries. Unit-testable.
     static func hasMarker(in json: [String: Any], provider: TerminalAgentProvider) -> Bool {
+        if provider == .codex, hasLegacyTopLevelCodexMarker(in: json) {
+            return true
+        }
         guard let hooks = hooksDictionary(json, provider: provider) else { return false }
         return hooks.values.contains { array in
             (array as? [[String: Any]])?.contains { containsMarker($0) } ?? false
+        }
+    }
+
+    private static func hasLegacyTopLevelCodexMarker(in json: [String: Any]) -> Bool {
+        json.contains { key, value in
+            key != "hooks"
+                && ((value as? [[String: Any]])?.contains(where: containsMarker) ?? false)
+        }
+    }
+
+    /// Migrate the invalid legacy layout emitted by older NotchDeck builds,
+    /// where Codex event arrays were written beside `hooks` instead of inside
+    /// it. Only NotchDeck entries are removed; any unrelated array entries and
+    /// top-level metadata remain untouched.
+    private static func removeLegacyTopLevelCodexEntries(
+        from json: inout [String: Any]
+    ) {
+        for (key, value) in json where key != "hooks" {
+            guard var entries = value as? [[String: Any]] else { continue }
+            let originalCount = entries.count
+            entries.removeAll(where: containsMarker)
+            guard entries.count != originalCount else { continue }
+            if entries.isEmpty {
+                json[key] = nil
+            } else {
+                json[key] = entries
+            }
         }
     }
 
@@ -680,60 +733,68 @@ enum HookInstaller {
     ) throws -> Data {
         var parser = JSONSourceParser(bytes: Array(data))
         let root = try parser.parse()
-        let hookObject: JSONSourceNode
+        let hookObjects: [JSONSourceNode]
         switch provider {
         case .claudeCode:
             guard case .object(_, let rootMembers) = root,
                   let hooks = rootMembers.first(where: { $0.key == "hooks" })?.value else {
                 return data
             }
-            hookObject = hooks
-        default:
-            hookObject = root
+            hookObjects = [hooks]
+        case .codex:
+            guard case .object(_, let rootMembers) = root else { return data }
+            // The nested object is the supported layout. Include the root as
+            // well so uninstall also cleans legacy top-level NotchDeck arrays.
+            let nested = rootMembers.first(where: { $0.key == "hooks" })?.value
+            hookObjects = nested.map { [$0, root] } ?? [root]
+        case .unknown:
+            hookObjects = [root]
         }
-        guard case .object(_, let hookMembers) = hookObject else { return data }
 
         var removals: [Range<Int>] = []
-        for member in hookMembers {
-            guard case .array(_, let elements) = member.value, !elements.isEmpty else { continue }
-            let managedIndexes = elements.indices.filter { index in
-                let range = elements[index].range
-                guard let entry = try? JSONSerialization.jsonObject(
-                    with: data.subdata(in: range)
-                ) as? [String: Any] else {
-                    return false
+        for hookObject in hookObjects {
+            guard case .object(_, let hookMembers) = hookObject else { continue }
+            for member in hookMembers {
+                guard case .array(_, let elements) = member.value, !elements.isEmpty else { continue }
+                let managedIndexes = elements.indices.filter { index in
+                    let range = elements[index].range
+                    guard let entry = try? JSONSerialization.jsonObject(
+                        with: data.subdata(in: range)
+                    ) as? [String: Any] else {
+                        return false
+                    }
+                    return containsMarker(entry)
                 }
-                return containsMarker(entry)
-            }
-            guard !managedIndexes.isEmpty else { continue }
+                guard !managedIndexes.isEmpty else { continue }
 
-            var runStart = managedIndexes[0]
-            var runEnd = runStart
-            func appendRun(_ first: Int, _ last: Int) {
-                if first == 0, last < elements.count - 1 {
-                    removals.append(
-                        elements[first].range.lowerBound..<elements[last + 1].range.lowerBound
-                    )
-                } else if first > 0 {
-                    removals.append(
-                        elements[first - 1].range.upperBound..<elements[last].range.upperBound
-                    )
-                } else {
-                    removals.append(
-                        elements[first].range.lowerBound..<elements[last].range.upperBound
-                    )
+                var runStart = managedIndexes[0]
+                var runEnd = runStart
+                func appendRun(_ first: Int, _ last: Int) {
+                    if first == 0, last < elements.count - 1 {
+                        removals.append(
+                            elements[first].range.lowerBound..<elements[last + 1].range.lowerBound
+                        )
+                    } else if first > 0 {
+                        removals.append(
+                            elements[first - 1].range.upperBound..<elements[last].range.upperBound
+                        )
+                    } else {
+                        removals.append(
+                            elements[first].range.lowerBound..<elements[last].range.upperBound
+                        )
+                    }
                 }
-            }
-            for index in managedIndexes.dropFirst() {
-                if index == runEnd + 1 {
-                    runEnd = index
-                } else {
-                    appendRun(runStart, runEnd)
-                    runStart = index
-                    runEnd = index
+                for index in managedIndexes.dropFirst() {
+                    if index == runEnd + 1 {
+                        runEnd = index
+                    } else {
+                        appendRun(runStart, runEnd)
+                        runStart = index
+                        runEnd = index
+                    }
                 }
+                appendRun(runStart, runEnd)
             }
-            appendRun(runStart, runEnd)
         }
 
         var result = data
@@ -743,20 +804,20 @@ enum HookInstaller {
         return result
     }
 
-    /// Codex keeps hooks at the top level of hooks.json; Claude nests them under
-    /// a "hooks" key in settings.json.
+    /// Both providers use a top-level "hooks" document member. Codex's decoder
+    /// rejects event names written directly at the document root.
     private static func hooksDictionary(_ json: [String: Any], provider: TerminalAgentProvider) -> [String: Any]? {
         switch provider {
-        case .claudeCode: return json["hooks"] as? [String: Any] ?? [:]
-        default: return json
+        case .claudeCode, .codex: return json["hooks"] as? [String: Any] ?? [:]
+        case .unknown: return json
         }
     }
 
     private static func setHooksDictionary(_ json: inout [String: Any], _ hooks: [String: Any],
                                            provider: TerminalAgentProvider) {
         switch provider {
-        case .claudeCode: json["hooks"] = hooks
-        default: json = hooks
+        case .claudeCode, .codex: json["hooks"] = hooks
+        case .unknown: json = hooks
         }
     }
 

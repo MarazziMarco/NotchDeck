@@ -103,11 +103,17 @@ final class HookInstallerTests: XCTestCase {
         XCTAssertNotNil(merged["hooks"])
     }
 
-    func testCodexMergeIsTopLevel() {
+    func testCodexMergeUsesDocumentedHooksContainer() {
         let merged = HookInstaller.mergeHooks(base: [:], provider: .codex, helper: "/tmp/bin/notchdeck-agent-hook")
         XCTAssertTrue(HookInstaller.hasMarker(in: merged, provider: .codex))
-        XCTAssertNotNil(merged["PermissionRequest"])
-        XCTAssertNil(merged["hooks"])   // codex is not nested
+        let hooks = merged["hooks"] as? [String: Any]
+        XCTAssertNotNil(hooks?["PermissionRequest"])
+        XCTAssertNil(merged["PermissionRequest"])
+        let entry = (hooks?["PermissionRequest"] as? [[String: Any]])?.first
+        let handler = (entry?["hooks"] as? [[String: Any]])?.first
+        XCTAssertNil(entry?["notchdeckManaged"])
+        XCTAssertNil(handler?["notchdeckManaged"])
+        XCTAssertNil(handler?["notchdeckHookVersion"])
     }
 
     func testMergePreservesUserHooks() {

@@ -94,7 +94,10 @@ final class AgentHookLifecycleTests: XCTestCase {
             "command": "/usr/local/bin/other-hook",
         ]
         let base: [String: Any] = [
-            "SessionStart": [["hooks": [thirdParty], "matcher": "third-party"]],
+            "description": "keep this metadata",
+            "hooks": [
+                "SessionStart": [["hooks": [thirdParty], "matcher": "third-party"]],
+            ],
             "customSetting": ["enabled": true],
         ]
         let desired = HookInstaller.mergeHooks(base: base, provider: .codex, helper: helper)
@@ -117,6 +120,89 @@ final class AgentHookLifecycleTests: XCTestCase {
             try FileManager.default.attributesOfItem(atPath: config.path)[.modificationDate] as? Date,
             modifiedBefore
         )
+    }
+
+    func testCodexInstallMigratesLegacyTopLevelEntriesIntoHooksContainer() throws {
+        let directory = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("nd-codex-shape-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let config = directory.appendingPathComponent("hooks.json")
+        let helper = "/tmp/bin/notchdeck-agent-hook"
+        let base: [String: Any] = [
+            "description": "preserve me",
+            "hooks": [
+                "PreToolUse": [[
+                    "matcher": "Bash",
+                    "hooks": [["type": "command", "command": "/opt/third-party"]],
+                ]],
+            ],
+            "PermissionRequest": [[
+                "matcher": "*",
+                "notchdeckManaged": true,
+                "hooks": [[
+                    "type": "command",
+                    "command": "\(helper) --provider codex --event permissionRequested",
+                    "notchdeckManaged": true,
+                ]],
+            ]],
+        ]
+        try JSONSerialization.data(withJSONObject: base).write(to: config)
+
+        let plan = try HookInstaller.installConfiguration(
+            provider: .codex,
+            at: config,
+            helper: helper
+        )
+
+        XCTAssertTrue(plan.changed)
+        let installed = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: config)) as? [String: Any]
+        )
+        XCTAssertEqual(installed["description"] as? String, "preserve me")
+        XCTAssertNil(installed["PermissionRequest"])
+        let hooks = try XCTUnwrap(installed["hooks"] as? [String: Any])
+        let preToolUse = try XCTUnwrap(hooks["PreToolUse"] as? [[String: Any]])
+        XCTAssertTrue(preToolUse.contains {
+            (($0["hooks"] as? [[String: Any]])?.first?["command"] as? String)
+                == "/opt/third-party"
+        })
+        XCTAssertNotNil(hooks["PermissionRequest"])
+    }
+
+    func testCodexUninstallPreservesDocumentAndThirdPartyBytes() throws {
+        let directory = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("nd-codex-remove-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let config = directory.appendingPathComponent("hooks.json")
+        let source = """
+        {
+          "description": "keep",
+          "hooks": {
+            "PermissionRequest": [
+              {"matcher":"Bash","hooks":[{"type":"command","command":"/opt/other-hook"}]},
+              {"matcher":"*","notchdeckManaged":true,"hooks":[{"type":"command","command":"/tmp/notchdeck-agent-hook","notchdeckManaged":true}]}
+            ]
+          }
+        }
+        """
+        let expected = """
+        {
+          "description": "keep",
+          "hooks": {
+            "PermissionRequest": [
+              {"matcher":"Bash","hooks":[{"type":"command","command":"/opt/other-hook"}]}
+            ]
+          }
+        }
+        """
+        try Data(source.utf8).write(to: config)
+
+        let plan = try HookInstaller.uninstallConfiguration(provider: .codex, at: config)
+
+        XCTAssertTrue(plan.changed)
+        XCTAssertEqual(try String(contentsOf: config), expected)
     }
 
     func testConfigInstallMergesThirdPartyHooksThenBecomesIdempotent() throws {
