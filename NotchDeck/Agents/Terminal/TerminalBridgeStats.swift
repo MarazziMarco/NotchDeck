@@ -20,6 +20,7 @@ final class TerminalBridgeStats: ObservableObject {
     @Published var lastEventAt: Date?
     @Published var lastEventType: String = "—"
     @Published var lastConnectedTitle: String = "—"
+    @Published private(set) var observedHookProviders: Set<TerminalAgentProvider> = []
 
     // Store / UI observability
     @Published var storeCount = 0
@@ -38,6 +39,15 @@ final class TerminalBridgeStats: ObservableObject {
     }
 
     func recordConnection() { rawConnections += 1 }
+
+    func recordObservedProvider(_ provider: TerminalAgentProvider) {
+        guard provider != .unknown else { return }
+        observedHookProviders.insert(provider)
+    }
+
+    func hasObservedHookEvent(_ provider: TerminalAgentProvider) -> Bool {
+        observedHookProviders.contains(provider)
+    }
 
     func recordDecoded(type: String, connectedTitle: String?) {
         decodedEvents += 1

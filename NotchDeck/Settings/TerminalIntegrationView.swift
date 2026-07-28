@@ -73,6 +73,12 @@ struct TerminalIntegrationView: View {
     @ViewBuilder private func providerBlock(_ title: String, provider: TerminalAgentProvider,
                                             binding: Binding<Bool>) -> some View {
         let installed = HookInstaller.isInstalled(provider)
+        let integrationState = HookInstaller.integrationState(
+            provider: provider,
+            installed: installed,
+            trustStatus: HookInstaller.trustStatus(provider),
+            observedEvent: stats.hasObservedHookEvent(provider)
+        )
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(title).fontWeight(.medium)
@@ -105,11 +111,25 @@ struct TerminalIntegrationView: View {
                 }
             }
 
-            if installed && provider == .codex
-                && HookInstaller.trustStatus(.codex) == .approvalRequired {
-                Label("Codex hook approval required", systemImage: "checkmark.shield")
+            switch integrationState {
+            case .hooksMissing:
+                Label("Hooks not installed", systemImage: "shippingbox")
                     .font(.caption2)
                     .foregroundStyle(DesignTokens.Palette.statusAttention)
+            case .trustRequired:
+                Label("Hooks installed — approve once with /hooks in Codex",
+                      systemImage: "checkmark.shield")
+                    .font(.caption2)
+                    .foregroundStyle(DesignTokens.Palette.statusAttention)
+            case .working:
+                Label(
+                    stats.hasObservedHookEvent(provider)
+                        ? "Hooks working — bridge traffic observed"
+                        : "Hooks installed and trusted",
+                    systemImage: "checkmark.seal.fill"
+                )
+                .font(.caption2)
+                .foregroundStyle(.green)
             }
 
             HStack(spacing: 8) {
@@ -156,7 +176,9 @@ struct TerminalIntegrationView: View {
     private func install(_ provider: TerminalAgentProvider) {
         do {
             let plan = try HookInstaller.install(provider)
-            message = "Installed. Backup: \(plan.backupPath ?? "none (new file)"). Restart your terminal sessions to connect."
+            message = plan.changed
+                ? "Installed. Backup: \(plan.backupPath ?? "none (new file)"). Restart your terminal sessions to connect."
+                : "Already installed. The configuration file was not rewritten."
         } catch {
             message = error.localizedDescription
             if provider == .codex { settings.settings.codexTerminalIntegration = false }

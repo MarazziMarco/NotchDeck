@@ -480,6 +480,9 @@ actor TerminalAgentBridge {
             }
             return
         }
+        await MainActor.run { [stats] in
+            stats.recordObservedProvider(event.provider)
+        }
         let currentSessions = await MainActor.run { [store] in store.sessions }
         let ancestry = event.pid.map { MacProcessAncestry.identities(from: $0) } ?? []
         let correlation = AgentHookProcessCorrelator.match(

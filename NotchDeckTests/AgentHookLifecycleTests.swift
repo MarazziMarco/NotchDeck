@@ -82,6 +82,155 @@ final class AgentHookLifecycleTests: XCTestCase {
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: destination.path))
     }
 
+    func testSemanticConfigInstallDoesNotRewriteEquivalentFile() throws {
+        let directory = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("nd-config-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let config = directory.appendingPathComponent("hooks.json")
+        let helper = "/tmp/bin/notchdeck-agent-hook"
+        let thirdParty: [String: Any] = [
+            "type": "command",
+            "command": "/usr/local/bin/other-hook",
+        ]
+        let base: [String: Any] = [
+            "SessionStart": [["hooks": [thirdParty], "matcher": "third-party"]],
+            "customSetting": ["enabled": true],
+        ]
+        let desired = HookInstaller.mergeHooks(base: base, provider: .codex, helper: helper)
+        let original = try JSONSerialization.data(withJSONObject: desired, options: [])
+        try original.write(to: config)
+        let modifiedBefore = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: config.path)[.modificationDate] as? Date
+        )
+
+        let plan = try HookInstaller.installConfiguration(
+            provider: .codex,
+            at: config,
+            helper: helper
+        )
+
+        XCTAssertFalse(plan.changed)
+        XCTAssertNil(plan.backupPath)
+        XCTAssertEqual(try Data(contentsOf: config), original)
+        XCTAssertEqual(
+            try FileManager.default.attributesOfItem(atPath: config.path)[.modificationDate] as? Date,
+            modifiedBefore
+        )
+    }
+
+    func testConfigInstallMergesThirdPartyHooksThenBecomesIdempotent() throws {
+        let directory = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("nd-config-merge-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let config = directory.appendingPathComponent("settings.json")
+        let helper = "/tmp/bin/notchdeck-agent-hook"
+        let originalObject: [String: Any] = [
+            "theme": "user-choice",
+            "hooks": [
+                "PermissionRequest": [[
+                    "matcher": "third-party",
+                    "hooks": [[
+                        "type": "command",
+                        "command": "/opt/example/approval-hook",
+                    ]],
+                ]],
+            ],
+        ]
+        let original = try JSONSerialization.data(
+            withJSONObject: originalObject,
+            options: [.prettyPrinted]
+        )
+        try original.write(to: config)
+
+        let first = try HookInstaller.installConfiguration(
+            provider: .claudeCode,
+            at: config,
+            helper: helper
+        )
+        XCTAssertTrue(first.changed)
+        XCTAssertNotNil(first.backupPath)
+        let installedData = try Data(contentsOf: config)
+        let installed = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: installedData) as? [String: Any]
+        )
+        XCTAssertEqual(installed["theme"] as? String, "user-choice")
+        let hooks = try XCTUnwrap(installed["hooks"] as? [String: Any])
+        let permission = try XCTUnwrap(hooks["PermissionRequest"] as? [[String: Any]])
+        XCTAssertTrue(permission.contains {
+            (($0["hooks"] as? [[String: Any]])?.first?["command"] as? String)
+                == "/opt/example/approval-hook"
+        })
+
+        let modifiedBefore = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: config.path)[.modificationDate] as? Date
+        )
+        let second = try HookInstaller.installConfiguration(
+            provider: .claudeCode,
+            at: config,
+            helper: helper
+        )
+        XCTAssertFalse(second.changed)
+        XCTAssertNil(second.backupPath)
+        XCTAssertEqual(try Data(contentsOf: config), installedData)
+        XCTAssertEqual(
+            try FileManager.default.attributesOfItem(atPath: config.path)[.modificationDate] as? Date,
+            modifiedBefore
+        )
+    }
+
+    func testUninstallRemovesOnlyManagedEntriesAndPreservesOtherBytes() throws {
+        let directory = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("nd-config-remove-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let config = directory.appendingPathComponent("settings.json")
+        let source = """
+        {
+          "theme": "keep-this-format",
+          "hooks": {
+            "PermissionRequest": [
+              {"matcher":"third","hooks":[{"type":"command","command":"/opt/other-hook"}]},
+              {"matcher":"*","notchdeckManaged":true,"hooks":[{"type":"command","command":"/tmp/notchdeck-agent-hook","notchdeckManaged":true}]}
+            ],
+            "SessionStart": [
+              {"notchdeckManaged":true,"hooks":[{"command":"/tmp/notchdeck-agent-hook"}]}
+            ]
+          },
+          "unrelated": { "spacing" : [ 1, 2, 3 ] }
+        }
+        """
+        let expected = """
+        {
+          "theme": "keep-this-format",
+          "hooks": {
+            "PermissionRequest": [
+              {"matcher":"third","hooks":[{"type":"command","command":"/opt/other-hook"}]}
+            ],
+            "SessionStart": [
+        __NOTCHDECK_EMPTY_ARRAY_INDENT__
+            ]
+          },
+          "unrelated": { "spacing" : [ 1, 2, 3 ] }
+        }
+        """.replacingOccurrences(
+            of: "__NOTCHDECK_EMPTY_ARRAY_INDENT__",
+            with: "      "
+        )
+        try Data(source.utf8).write(to: config)
+
+        let plan = try HookInstaller.uninstallConfiguration(provider: .claudeCode, at: config)
+
+        XCTAssertTrue(plan.changed)
+        XCTAssertNotNil(plan.backupPath)
+        XCTAssertEqual(try String(contentsOf: config), expected)
+        XCTAssertEqual(
+            try String(contentsOf: URL(fileURLWithPath: try XCTUnwrap(plan.backupPath))),
+            source
+        )
+    }
+
     func testSocketBootstrapReplacesStaleFilesystemEntry() throws {
         let directory = URL(fileURLWithPath: "/tmp", isDirectory: true)
             .appendingPathComponent("nd-stale-\(UUID().uuidString.prefix(8))", isDirectory: true)

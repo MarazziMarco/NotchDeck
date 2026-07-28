@@ -14,21 +14,30 @@ enum HookInstaller {
         case unknown
     }
 
+    enum IntegrationState: Equatable {
+        case hooksMissing
+        case trustRequired
+        case working
+    }
+
     struct Plan: Equatable {
         var provider: TerminalAgentProvider
         var configPath: String
         var backupPath: String?
         var diff: String
+        var changed: Bool
     }
 
     enum HookError: LocalizedError {
         case helperMissing
         case helperInstallFailed(String)
+        case invalidConfig(String)
         case writeFailed(String)
         var errorDescription: String? {
             switch self {
             case .helperMissing: return "The notchdeck-agent-hook helper could not be located in the app bundle."
             case .helperInstallFailed(let d): return "Failed to install notchdeck-agent-hook: \(d)"
+            case .invalidConfig(let d): return "Hook configuration is not valid JSON: \(d)"
             case .writeFailed(let d): return "Failed to write hook configuration: \(d)"
             }
         }
@@ -245,12 +254,33 @@ enum HookInstaller {
         catch { throw HookError.writeFailed(error.localizedDescription) }
     }
 
-    private static func backup(_ url: URL) -> String? {
+    private static func backup(_ url: URL) throws -> String? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let stamp = Int(Date().timeIntervalSince1970)
-        let backup = url.appendingPathExtension("notchdeck-backup-\(stamp)")
-        try? FileManager.default.copyItem(at: url, to: backup)
-        return backup.path
+        let stamp = Int(Date().timeIntervalSince1970 * 1_000)
+        let backup = url.appendingPathExtension(
+            "notchdeck-backup-\(stamp)-\(UUID().uuidString.prefix(8))"
+        )
+        do {
+            try FileManager.default.copyItem(at: url, to: backup)
+            return backup.path
+        } catch {
+            throw HookError.writeFailed("backup failed: \(error.localizedDescription)")
+        }
+    }
+
+    private static func readConfiguration(at url: URL) throws -> ([String: Any], Data?) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return ([:], nil) }
+        do {
+            let data = try Data(contentsOf: url)
+            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw HookError.invalidConfig("top-level value is not an object")
+            }
+            return (object, data)
+        } catch let error as HookError {
+            throw error
+        } catch {
+            throw HookError.invalidConfig(error.localizedDescription)
+        }
     }
 
     // MARK: Public API
@@ -279,7 +309,11 @@ enum HookInstaller {
     static func needsReinstall(_ provider: TerminalAgentProvider) -> Bool {
         let json = loadJSON(configURL(for: provider))
         guard hasMarker(in: json, provider: provider) else { return false }
-        return !configIsUpToDate(json, provider: provider)
+        return !managedEntriesAreEquivalent(
+            json,
+            provider: provider,
+            helper: installedHelperURL.path
+        )
     }
 
     /// Codex 0.144.x stores reviewed hook identities in config.toml. This is
@@ -302,6 +336,18 @@ enum HookInstaller {
             : .approvalRequired
     }
 
+    static func integrationState(
+        provider: TerminalAgentProvider,
+        installed: Bool,
+        trustStatus: HookTrustStatus,
+        observedEvent: Bool
+    ) -> IntegrationState {
+        guard installed else { return .hooksMissing }
+        if observedEvent { return .working }
+        guard provider == .codex else { return .working }
+        return trustStatus == .reviewed ? .working : .trustRequired
+    }
+
     /// Human-readable preview of what will change (the merged hook block).
     static func preview(_ provider: TerminalAgentProvider) throws -> String {
         let helper = installedHelperURL.path
@@ -315,21 +361,87 @@ enum HookInstaller {
     @discardableResult
     static func install(_ provider: TerminalAgentProvider) throws -> Plan {
         let helperURL = try ensureHelperInstalled()
-        let url = configURL(for: provider)
-        let backupPath = backup(url)
-        let merged = try mergedConfig(provider: provider, helper: helperURL.path)
-        try writeJSON(merged, to: url)
-        return Plan(provider: provider,
-                    configPath: SecretSanitizer.redactHome(url.path),
-                    backupPath: backupPath.map(SecretSanitizer.redactHome),
-                    diff: "Installed \(entries(for: provider, helper: helperURL.path).count) hooks.")
+        return try installConfiguration(
+            provider: provider,
+            at: configURL(for: provider),
+            helper: helperURL.path
+        )
     }
 
     static func uninstall(_ provider: TerminalAgentProvider) throws {
-        let url = configURL(for: provider)
-        _ = backup(url)
-        let json = removeHooks(base: loadJSON(url), provider: provider)
-        try writeJSON(json, to: url)
+        _ = try uninstallConfiguration(provider: provider, at: configURL(for: provider))
+    }
+
+    @discardableResult
+    static func installConfiguration(
+        provider: TerminalAgentProvider,
+        at url: URL,
+        helper: String
+    ) throws -> Plan {
+        let (base, _) = try readConfiguration(at: url)
+        if managedEntriesAreEquivalent(base, provider: provider, helper: helper) {
+            return Plan(
+                provider: provider,
+                configPath: SecretSanitizer.redactHome(url.path),
+                backupPath: nil,
+                diff: "NotchDeck hooks are already semantically identical.",
+                changed: false
+            )
+        }
+
+        let merged = mergeHooks(base: base, provider: provider, helper: helper)
+        let backupPath = try backup(url)
+        try writeJSON(merged, to: url)
+        return Plan(
+            provider: provider,
+            configPath: SecretSanitizer.redactHome(url.path),
+            backupPath: backupPath.map(SecretSanitizer.redactHome),
+            diff: "Installed \(entries(for: provider, helper: helper).count) hooks.",
+            changed: true
+        )
+    }
+
+    @discardableResult
+    static func uninstallConfiguration(
+        provider: TerminalAgentProvider,
+        at url: URL
+    ) throws -> Plan {
+        let (_, originalData) = try readConfiguration(at: url)
+        guard let originalData else {
+            return Plan(
+                provider: provider,
+                configPath: SecretSanitizer.redactHome(url.path),
+                backupPath: nil,
+                diff: "No configuration file exists.",
+                changed: false
+            )
+        }
+        let edited = try removingManagedEntries(
+            from: originalData,
+            provider: provider
+        )
+        guard edited != originalData else {
+            return Plan(
+                provider: provider,
+                configPath: SecretSanitizer.redactHome(url.path),
+                backupPath: nil,
+                diff: "No NotchDeck hooks were present.",
+                changed: false
+            )
+        }
+        let backupPath = try backup(url)
+        do {
+            try edited.write(to: url, options: .atomic)
+        } catch {
+            throw HookError.writeFailed(error.localizedDescription)
+        }
+        return Plan(
+            provider: provider,
+            configPath: SecretSanitizer.redactHome(url.path),
+            backupPath: backupPath.map(SecretSanitizer.redactHome),
+            diff: "Removed only NotchDeck-managed hook entries.",
+            changed: true
+        )
     }
 
     // MARK: Merge core (pure enough to unit-test via public shims)
@@ -344,6 +456,13 @@ enum HookInstaller {
                            helper: String) -> [String: Any] {
         var json = base
         var hooks = hooksDictionary(json, provider: provider) ?? [:]
+        // Retire obsolete NotchDeck events too, not only events that still exist
+        // in the current schema.
+        for (key, value) in hooks {
+            guard var array = value as? [[String: Any]] else { continue }
+            array.removeAll { containsMarker($0) }
+            hooks[key] = array
+        }
         for spec in entries(for: provider, helper: helper) {
             let cmd = command(helper: helper, provider: provider, event: spec.event)
             // PermissionRequest must be SYNCHRONOUS: no `async`, and a timeout
@@ -356,14 +475,38 @@ enum HookInstaller {
             var entry: [String: Any] = ["hooks": [hookDict], managedKey: true]
             if spec.matcher { entry["matcher"] = "*" }
             var array = (hooks[spec.hookEvent] as? [[String: Any]]) ?? []
-            // Remove ALL prior NotchDeck-managed entries for this event so exactly
-            // one active PermissionRequest hook remains (no duplicates).
-            array.removeAll { containsMarker($0) }
             array.append(entry)
             hooks[spec.hookEvent] = array
         }
         setHooksDictionary(&json, hooks, provider: provider)
         return json
+    }
+
+    static func managedEntriesAreEquivalent(
+        _ json: [String: Any],
+        provider: TerminalAgentProvider,
+        helper: String
+    ) -> Bool {
+        guard let actualHooks = hooksDictionary(json, provider: provider) else { return false }
+        let desiredJSON = mergeHooks(base: [:], provider: provider, helper: helper)
+        guard let desiredHooks = hooksDictionary(desiredJSON, provider: provider) else { return false }
+
+        let allKeys = Set(actualHooks.keys).union(desiredHooks.keys)
+        for key in allKeys {
+            let actualManaged = ((actualHooks[key] as? [[String: Any]]) ?? [])
+                .filter(containsMarker)
+            let desiredManaged = ((desiredHooks[key] as? [[String: Any]]) ?? [])
+                .filter(containsMarker)
+            guard jsonArraysEqual(actualManaged, desiredManaged) else { return false }
+        }
+        return true
+    }
+
+    private static func jsonArraysEqual(
+        _ lhs: [[String: Any]],
+        _ rhs: [[String: Any]]
+    ) -> Bool {
+        NSArray(array: lhs).isEqual(to: rhs)
     }
 
     /// Pure removal: strip every NotchDeck-added hook entry, leaving the user's.
@@ -385,6 +528,219 @@ enum HookInstaller {
         return hooks.values.contains { array in
             (array as? [[String: Any]])?.contains { containsMarker($0) } ?? false
         }
+    }
+
+    // MARK: Source-preserving uninstall
+
+    private struct JSONSourceMember {
+        var key: String
+        var value: JSONSourceNode
+    }
+
+    private indirect enum JSONSourceNode {
+        case object(Range<Int>, [JSONSourceMember])
+        case array(Range<Int>, [JSONSourceNode])
+        case string(Range<Int>)
+        case scalar(Range<Int>)
+
+        var range: Range<Int> {
+            switch self {
+            case .object(let range, _), .array(let range, _),
+                 .string(let range), .scalar(let range):
+                return range
+            }
+        }
+    }
+
+    private struct JSONSourceParser {
+        let bytes: [UInt8]
+        var index = 0
+
+        mutating func parse() throws -> JSONSourceNode {
+            skipWhitespace()
+            let node = try parseValue()
+            skipWhitespace()
+            guard index == bytes.count else { throw syntax("trailing content") }
+            return node
+        }
+
+        private mutating func parseValue() throws -> JSONSourceNode {
+            skipWhitespace()
+            guard index < bytes.count else { throw syntax("unexpected end of input") }
+            switch bytes[index] {
+            case 0x7B: return try parseObject() // {
+            case 0x5B: return try parseArray()  // [
+            case 0x22:
+                return .string(try parseStringRange())
+            default:
+                return try parseScalar()
+            }
+        }
+
+        private mutating func parseObject() throws -> JSONSourceNode {
+            let start = index
+            index += 1
+            skipWhitespace()
+            var members: [JSONSourceMember] = []
+            if consume(0x7D) { return .object(start..<index, members) }
+            while true {
+                skipWhitespace()
+                let keyRange = try parseStringRange()
+                let keyData = Data(bytes[keyRange])
+                guard let key = try JSONSerialization.jsonObject(
+                    with: keyData,
+                    options: .fragmentsAllowed
+                ) as? String else {
+                    throw syntax("invalid object key")
+                }
+                skipWhitespace()
+                guard consume(0x3A) else { throw syntax("missing ':'") }
+                let value = try parseValue()
+                members.append(.init(key: key, value: value))
+                skipWhitespace()
+                if consume(0x7D) { break }
+                guard consume(0x2C) else { throw syntax("missing ','") }
+            }
+            return .object(start..<index, members)
+        }
+
+        private mutating func parseArray() throws -> JSONSourceNode {
+            let start = index
+            index += 1
+            skipWhitespace()
+            var elements: [JSONSourceNode] = []
+            if consume(0x5D) { return .array(start..<index, elements) }
+            while true {
+                elements.append(try parseValue())
+                skipWhitespace()
+                if consume(0x5D) { break }
+                guard consume(0x2C) else { throw syntax("missing ','") }
+            }
+            return .array(start..<index, elements)
+        }
+
+        private mutating func parseStringRange() throws -> Range<Int> {
+            guard index < bytes.count, bytes[index] == 0x22 else {
+                throw syntax("expected string")
+            }
+            let start = index
+            index += 1
+            var escaped = false
+            while index < bytes.count {
+                let byte = bytes[index]
+                index += 1
+                if escaped {
+                    escaped = false
+                } else if byte == 0x5C {
+                    escaped = true
+                } else if byte == 0x22 {
+                    return start..<index
+                }
+            }
+            throw syntax("unterminated string")
+        }
+
+        private mutating func parseScalar() throws -> JSONSourceNode {
+            let start = index
+            while index < bytes.count {
+                switch bytes[index] {
+                case 0x20, 0x09, 0x0A, 0x0D, 0x2C, 0x5D, 0x7D:
+                    guard index > start else { throw syntax("invalid value") }
+                    return .scalar(start..<index)
+                default:
+                    index += 1
+                }
+            }
+            guard index > start else { throw syntax("invalid value") }
+            return .scalar(start..<index)
+        }
+
+        private mutating func skipWhitespace() {
+            while index < bytes.count,
+                  bytes[index] == 0x20 || bytes[index] == 0x09
+                    || bytes[index] == 0x0A || bytes[index] == 0x0D {
+                index += 1
+            }
+        }
+
+        private mutating func consume(_ byte: UInt8) -> Bool {
+            guard index < bytes.count, bytes[index] == byte else { return false }
+            index += 1
+            return true
+        }
+
+        private func syntax(_ detail: String) -> HookError {
+            .invalidConfig("\(detail) at byte \(index)")
+        }
+    }
+
+    private static func removingManagedEntries(
+        from data: Data,
+        provider: TerminalAgentProvider
+    ) throws -> Data {
+        var parser = JSONSourceParser(bytes: Array(data))
+        let root = try parser.parse()
+        let hookObject: JSONSourceNode
+        switch provider {
+        case .claudeCode:
+            guard case .object(_, let rootMembers) = root,
+                  let hooks = rootMembers.first(where: { $0.key == "hooks" })?.value else {
+                return data
+            }
+            hookObject = hooks
+        default:
+            hookObject = root
+        }
+        guard case .object(_, let hookMembers) = hookObject else { return data }
+
+        var removals: [Range<Int>] = []
+        for member in hookMembers {
+            guard case .array(_, let elements) = member.value, !elements.isEmpty else { continue }
+            let managedIndexes = elements.indices.filter { index in
+                let range = elements[index].range
+                guard let entry = try? JSONSerialization.jsonObject(
+                    with: data.subdata(in: range)
+                ) as? [String: Any] else {
+                    return false
+                }
+                return containsMarker(entry)
+            }
+            guard !managedIndexes.isEmpty else { continue }
+
+            var runStart = managedIndexes[0]
+            var runEnd = runStart
+            func appendRun(_ first: Int, _ last: Int) {
+                if first == 0, last < elements.count - 1 {
+                    removals.append(
+                        elements[first].range.lowerBound..<elements[last + 1].range.lowerBound
+                    )
+                } else if first > 0 {
+                    removals.append(
+                        elements[first - 1].range.upperBound..<elements[last].range.upperBound
+                    )
+                } else {
+                    removals.append(
+                        elements[first].range.lowerBound..<elements[last].range.upperBound
+                    )
+                }
+            }
+            for index in managedIndexes.dropFirst() {
+                if index == runEnd + 1 {
+                    runEnd = index
+                } else {
+                    appendRun(runStart, runEnd)
+                    runStart = index
+                    runEnd = index
+                }
+            }
+            appendRun(runStart, runEnd)
+        }
+
+        var result = data
+        for range in removals.sorted(by: { $0.lowerBound > $1.lowerBound }) {
+            result.removeSubrange(range)
+        }
+        return result
     }
 
     /// Codex keeps hooks at the top level of hooks.json; Claude nests them under

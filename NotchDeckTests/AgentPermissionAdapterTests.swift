@@ -419,4 +419,43 @@ final class AgentPermissionAdapterTests: XCTestCase {
             .reviewed
         )
     }
+
+    func testIntegrationStateSeparatesMissingTrustAndObservedWorking() {
+        XCTAssertEqual(
+            HookInstaller.integrationState(
+                provider: .codex,
+                installed: false,
+                trustStatus: .reviewed,
+                observedEvent: true
+            ),
+            .hooksMissing
+        )
+        XCTAssertEqual(
+            HookInstaller.integrationState(
+                provider: .codex,
+                installed: true,
+                trustStatus: .approvalRequired,
+                observedEvent: false
+            ),
+            .trustRequired
+        )
+        XCTAssertEqual(
+            HookInstaller.integrationState(
+                provider: .codex,
+                installed: true,
+                trustStatus: .approvalRequired,
+                observedEvent: true
+            ),
+            .working
+        )
+        XCTAssertEqual(
+            HookInstaller.integrationState(
+                provider: .claudeCode,
+                installed: true,
+                trustStatus: .notApplicable,
+                observedEvent: false
+            ),
+            .working
+        )
+    }
 }

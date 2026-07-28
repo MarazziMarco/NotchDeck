@@ -90,7 +90,7 @@ public enum TerminalAgentEventType: String, Codable {
     case decisionDelivered
 }
 
-public enum TerminalAgentProvider: String, Codable, Sendable {
+public enum TerminalAgentProvider: String, Codable, Hashable, Sendable {
     case codex
     case claudeCode
     case unknown
