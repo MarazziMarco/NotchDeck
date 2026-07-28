@@ -3,6 +3,105 @@ import Darwin
 @testable import NotchDeck
 
 final class AgentHookLifecycleTests: XCTestCase {
+    func testSocketBootstrapReplacesStaleFilesystemEntry() throws {
+        let directory = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("nd-stale-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("bridge.sock").path
+        try Data("stale".utf8).write(to: URL(fileURLWithPath: path))
+
+        let lease = try BridgeSocketBootstrap.bind(path: path)
+        defer { lease.closeAndUnlink() }
+
+        var info = stat()
+        XCTAssertEqual(stat(path, &info), 0)
+        XCTAssertEqual(info.st_mode & S_IFMT, S_IFSOCK)
+        let client = Self.connectClient(path)
+        XCTAssertGreaterThanOrEqual(client, 0)
+        if client >= 0 { close(client) }
+    }
+
+    func testSocketBootstrapRefusesLiveListenerWithoutReplacingIt() throws {
+        let directory = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("nd-live-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("bridge.sock").path
+        let first = try BridgeSocketBootstrap.bind(path: path)
+        defer { first.closeAndUnlink() }
+        var before = stat()
+        XCTAssertEqual(stat(path, &before), 0)
+
+        XCTAssertThrowsError(try BridgeSocketBootstrap.bind(path: path)) { error in
+            guard case BridgeLifecycleError.alreadyRunning(let reportedPath) = error else {
+                return XCTFail("expected alreadyRunning, got \(error)")
+            }
+            XCTAssertEqual(reportedPath, path)
+        }
+
+        var after = stat()
+        XCTAssertEqual(stat(path, &after), 0)
+        XCTAssertEqual(after.st_ino, before.st_ino)
+        let client = Self.connectClient(path)
+        XCTAssertGreaterThanOrEqual(client, 0, "first listener must remain reachable")
+        if client >= 0 { close(client) }
+    }
+
+    func testSocketBootstrapRejectsDarwinPathLimitBeforeTouchingFilesystem() {
+        let path = "/" + String(repeating: "a", count: 103)
+        XCTAssertEqual(path.utf8.count, 104)
+
+        XCTAssertThrowsError(try BridgeSocketBootstrap.bind(path: path)) { error in
+            guard case BridgeLifecycleError.pathTooLong(let reportedPath, let byteCount) = error else {
+                return XCTFail("expected pathTooLong, got \(error)")
+            }
+            XCTAssertEqual(reportedPath, path)
+            XCTAssertEqual(byteCount, 104)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path))
+    }
+
+    func testSocketBootstrapSerializesSimultaneousLaunches() throws {
+        let directory = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("nd-race-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("bridge.sock").path
+        let queue = DispatchQueue(label: "notchdeck.socket-race", attributes: .concurrent)
+        let group = DispatchGroup()
+        let resultLock = NSLock()
+        var leases: [BridgeSocketLease] = []
+        var alreadyRunningCount = 0
+        var unexpectedErrors: [Error] = []
+
+        for _ in 0..<2 {
+            group.enter()
+            queue.async {
+                defer { group.leave() }
+                do {
+                    let lease = try BridgeSocketBootstrap.bind(path: path)
+                    resultLock.lock()
+                    leases.append(lease)
+                    resultLock.unlock()
+                } catch BridgeLifecycleError.alreadyRunning {
+                    resultLock.lock()
+                    alreadyRunningCount += 1
+                    resultLock.unlock()
+                } catch {
+                    resultLock.lock()
+                    unexpectedErrors.append(error)
+                    resultLock.unlock()
+                }
+            }
+        }
+        XCTAssertEqual(group.wait(timeout: .now() + 3), .success)
+        defer { leases.forEach { $0.closeAndUnlink() } }
+        XCTAssertTrue(unexpectedErrors.isEmpty, "\(unexpectedErrors)")
+        XCTAssertEqual(leases.count, 1)
+        XCTAssertEqual(alreadyRunningCount, 1)
+    }
+
     private func helperURL() throws -> URL {
         try XCTUnwrap(HookInstaller.bundledHelperURL())
     }
@@ -142,6 +241,33 @@ final class AgentHookLifecycleTests: XCTestCase {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
         return server
+    }
+
+    private static func connectClient(_ path: String) -> Int32 {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return -1 }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let capacity = MemoryLayout.size(ofValue: address.sun_path)
+        _ = withUnsafeMutablePointer(to: &address.sun_path) { pointer in
+            path.withCString {
+                strncpy(
+                    UnsafeMutableRawPointer(pointer).assumingMemoryBound(to: CChar.self),
+                    $0,
+                    capacity - 1
+                )
+            }
+        }
+        let result = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard result == 0 else {
+            close(fd)
+            return -1
+        }
+        return fd
     }
 
     private func readEvent(_ client: Int32) throws -> TerminalAgentEvent {

@@ -10,6 +10,7 @@ final class TerminalBridgeStats: ObservableObject {
     @Published var isListening = false
     @Published var startedAt: Date?
     @Published var socketPath: String = TerminalAgentProtocol.socketURL().path
+    @Published var lastLifecycleError: String?
 
     @Published var rawConnections = 0
     @Published var decodedEvents = 0
@@ -30,6 +31,10 @@ final class TerminalBridgeStats: ObservableObject {
     func markListening(_ on: Bool) {
         isListening = on
         if on && startedAt == nil { startedAt = Date() }
+    }
+
+    func recordLifecycleFailure(_ message: String?) {
+        lastLifecycleError = message
     }
 
     func recordConnection() { rawConnections += 1 }

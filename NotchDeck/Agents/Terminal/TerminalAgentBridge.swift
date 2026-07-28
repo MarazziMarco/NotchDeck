@@ -1,6 +1,260 @@
 import Foundation
 import Darwin
 
+enum BridgeLifecycleError: Error, LocalizedError {
+    case pathTooLong(String, Int)
+    case alreadyRunning(String)
+    case systemCall(operation: String, path: String, code: Int32)
+    case fileSystem(operation: String, path: String, detail: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .pathTooLong(let path, let bytes):
+            return "Bridge socket path is \(bytes) UTF-8 bytes; Darwin requires fewer than 104: \(path)"
+        case .alreadyRunning(let path):
+            return "Another NotchDeck bridge is already listening at \(path)."
+        case .systemCall(let operation, let path, let code):
+            return "Bridge \(operation) failed at \(path): [errno \(code)] \(String(cString: strerror(code)))."
+        case .fileSystem(let operation, let path, let detail):
+            return "Bridge \(operation) failed at \(path): \(detail)."
+        }
+    }
+}
+
+/// An owned Unix listener. Cleanup verifies that the filesystem path still
+/// points at this listener's inode while holding the launch lock, so an instance
+/// that never acquired the socket cannot remove another instance's endpoint.
+final class BridgeSocketLease: @unchecked Sendable {
+    private let stateLock = NSLock()
+    private var descriptor: Int32
+    private let device: dev_t
+    private let inode: ino_t
+    let path: String
+    let lockPath: String
+
+    init(descriptor: Int32, path: String, lockPath: String, device: dev_t, inode: ino_t) {
+        self.descriptor = descriptor
+        self.path = path
+        self.lockPath = lockPath
+        self.device = device
+        self.inode = inode
+    }
+
+    var fileDescriptor: Int32 {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return descriptor
+    }
+
+    func closeAndUnlink() {
+        stateLock.lock()
+        guard descriptor >= 0 else {
+            stateLock.unlock()
+            return
+        }
+        let fd = descriptor
+        descriptor = -1
+        stateLock.unlock()
+
+        let launchLock = open(lockPath, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        if launchLock >= 0 { _ = flock(launchLock, LOCK_EX) }
+        defer {
+            if launchLock >= 0 {
+                _ = flock(launchLock, LOCK_UN)
+                close(launchLock)
+            }
+        }
+
+        var current = stat()
+        let sameEndpoint = lstat(path, &current) == 0
+            && current.st_dev == device
+            && current.st_ino == inode
+        close(fd)
+        if sameEndpoint { _ = unlink(path) }
+    }
+
+    deinit { closeAndUnlink() }
+}
+
+enum BridgeSocketBootstrap {
+    static let darwinPathCapacity = 104
+    static let defaultProbeTimeoutMilliseconds: Int32 = 200
+
+    static func bind(path: String, backlog: Int32 = 16,
+                     probeTimeoutMilliseconds: Int32 = defaultProbeTimeoutMilliseconds) throws
+        -> BridgeSocketLease {
+        let byteCount = path.utf8.count
+        guard byteCount < darwinPathCapacity else {
+            throw BridgeLifecycleError.pathTooLong(path, byteCount)
+        }
+
+        let url = URL(fileURLWithPath: path)
+        let directory = url.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: directory.path
+            )
+        } catch {
+            throw BridgeLifecycleError.fileSystem(
+                operation: "prepare directory",
+                path: directory.path,
+                detail: error.localizedDescription
+            )
+        }
+
+        let lockPath = directory.appendingPathComponent("terminal-bridge.lock").path
+        let lockFD = open(lockPath, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard lockFD >= 0 else {
+            throw systemError("open lockfile", lockPath)
+        }
+        defer {
+            _ = flock(lockFD, LOCK_UN)
+            close(lockFD)
+        }
+        guard flock(lockFD, LOCK_EX) == 0 else {
+            throw systemError("lock", lockPath)
+        }
+
+        var existing = stat()
+        if lstat(path, &existing) == 0 {
+            if existing.st_mode & S_IFMT == S_IFSOCK {
+                if try probe(path: path, timeoutMilliseconds: probeTimeoutMilliseconds) {
+                    throw BridgeLifecycleError.alreadyRunning(path)
+                }
+            }
+            do {
+                try FileManager.default.removeItem(atPath: path)
+            } catch {
+                throw BridgeLifecycleError.fileSystem(
+                    operation: "remove stale socket",
+                    path: path,
+                    detail: error.localizedDescription
+                )
+            }
+        } else if errno != ENOENT {
+            throw systemError("inspect", path)
+        }
+
+        let listener = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard listener >= 0 else { throw systemError("socket", path) }
+        var keepListener = false
+        defer { if !keepListener { close(listener) } }
+
+        var noSignal: Int32 = 1
+        _ = setsockopt(listener, SOL_SOCKET, SO_NOSIGPIPE, &noSignal,
+                       socklen_t(MemoryLayout<Int32>.size))
+        var address = try socketAddress(path: path)
+        let bound = withUnsafePointer(to: &address) { pointer -> Int32 in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard bound == 0 else { throw systemError("bind", path) }
+        guard chmod(path, 0o600) == 0 else {
+            let code = errno
+            _ = unlink(path)
+            throw BridgeLifecycleError.systemCall(operation: "chmod", path: path, code: code)
+        }
+        guard listen(listener, backlog) == 0 else {
+            let code = errno
+            _ = unlink(path)
+            throw BridgeLifecycleError.systemCall(operation: "listen", path: path, code: code)
+        }
+
+        var info = stat()
+        guard lstat(path, &info) == 0 else {
+            let code = errno
+            _ = unlink(path)
+            throw BridgeLifecycleError.systemCall(
+                operation: "inspect bound socket", path: path, code: code
+            )
+        }
+        keepListener = true
+        return BridgeSocketLease(
+            descriptor: listener,
+            path: path,
+            lockPath: lockPath,
+            device: info.st_dev,
+            inode: info.st_ino
+        )
+    }
+
+    /// Returns true only for a live listener. A refused or vanished socket is
+    /// stale; every other error is surfaced and therefore never authorizes unlink.
+    private static func probe(path: String, timeoutMilliseconds: Int32) throws -> Bool {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw systemError("probe socket", path) }
+        defer { close(fd) }
+        let flags = fcntl(fd, F_GETFL, 0)
+        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            throw systemError("configure probe", path)
+        }
+        var address = try socketAddress(path: path)
+        let result = withUnsafePointer(to: &address) { pointer -> Int32 in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        if result == 0 { return true }
+        let initialError = errno
+        if initialError == ECONNREFUSED || initialError == ENOENT { return false }
+        guard initialError == EINPROGRESS || initialError == EAGAIN else {
+            throw BridgeLifecycleError.systemCall(
+                operation: "probe connect", path: path, code: initialError
+            )
+        }
+
+        var descriptor = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+        let pollResult = poll(&descriptor, 1, timeoutMilliseconds)
+        guard pollResult > 0 else {
+            let code = pollResult == 0 ? ETIMEDOUT : errno
+            throw BridgeLifecycleError.systemCall(
+                operation: "probe connect", path: path, code: code
+            )
+        }
+        var socketError: Int32 = 0
+        var length = socklen_t(MemoryLayout<Int32>.size)
+        guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &socketError, &length) == 0 else {
+            throw systemError("read probe result", path)
+        }
+        if socketError == 0 { return true }
+        if socketError == ECONNREFUSED || socketError == ENOENT { return false }
+        throw BridgeLifecycleError.systemCall(
+            operation: "probe connect", path: path, code: socketError
+        )
+    }
+
+    private static func socketAddress(path: String) throws -> sockaddr_un {
+        let byteCount = path.utf8.count
+        guard byteCount < darwinPathCapacity else {
+            throw BridgeLifecycleError.pathTooLong(path, byteCount)
+        }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let capacity = MemoryLayout.size(ofValue: address.sun_path)
+        _ = withUnsafeMutablePointer(to: &address.sun_path) { pointer in
+            path.withCString {
+                strncpy(
+                    UnsafeMutableRawPointer(pointer).assumingMemoryBound(to: CChar.self),
+                    $0,
+                    capacity - 1
+                )
+            }
+        }
+        return address
+    }
+
+    private static func systemError(_ operation: String, _ path: String) -> BridgeLifecycleError {
+        BridgeLifecycleError.systemCall(operation: operation, path: path, code: errno)
+    }
+}
+
 /// Thread-safe holder for the bridge's blocking-I/O state. The accept/read loops
 /// run on dedicated background threads (NOT the actor executor), so a blocking
 /// `accept()` / `read()` can never stall the actor. State that those threads and
@@ -36,7 +290,9 @@ private struct PendingApprovalConnection {
 actor TerminalAgentBridge {
     private let store: AgentSessionStore
     nonisolated let stats: TerminalBridgeStats
+    private nonisolated let socketURL: URL
     private nonisolated let io = BridgeIO()
+    private var socketLease: BridgeSocketLease?
     private var sweepTask: Task<Void, Never>?
 
     /// provider + providerSessionID → our session UUID.
@@ -70,9 +326,11 @@ actor TerminalAgentBridge {
         }
     }
 
-    init(store: AgentSessionStore, stats: TerminalBridgeStats) {
+    init(store: AgentSessionStore, stats: TerminalBridgeStats,
+         socketURL: URL = TerminalAgentProtocol.socketURL()) {
         self.store = store
         self.stats = stats
+        self.socketURL = socketURL
     }
 
     func configure(mode: AgentPermissionHandlingMode, fallbackDelay: TimeInterval,
@@ -86,43 +344,31 @@ actor TerminalAgentBridge {
     }
 
     var isListening: Bool { io.running }
-    nonisolated var socketPath: String { TerminalAgentProtocol.socketURL().path }
+    nonisolated var socketPath: String { socketURL.path }
 
     // MARK: Lifecycle
 
     func start() {
         guard !io.running else { return }
-        let url = TerminalAgentProtocol.socketURL()
-        AppPaths.ensureDirectory(url.deletingLastPathComponent())
-        try? FileManager.default.setAttributes([.posixPermissions: 0o700],
-                                               ofItemAtPath: url.deletingLastPathComponent().path)
-        unlink(url.path)
-
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { Log.agents.error("bridge: socket() failed"); return }
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let path = url.path
-        let capacity = MemoryLayout.size(ofValue: addr.sun_path)
-        _ = withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
-            path.withCString { cstr in
-                strncpy(UnsafeMutableRawPointer(ptr).assumingMemoryBound(to: CChar.self),
-                        cstr, capacity - 1)
-            }
+        let url = socketURL
+        let lease: BridgeSocketLease
+        do {
+            lease = try BridgeSocketBootstrap.bind(path: url.path)
+        } catch {
+            Log.agents.error("bridge lifecycle failed: \(error.localizedDescription)")
+            Task { @MainActor [stats] in stats.recordLifecycleFailure(error.localizedDescription) }
+            return
         }
-        let len = socklen_t(MemoryLayout<sockaddr_un>.size)
-        let bound = withUnsafePointer(to: &addr) { p -> Int32 in
-            p.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, len) }
-        }
-        guard bound == 0 else { Log.agents.error("bridge: bind() failed"); close(fd); return }
-        chmod(path, 0o600)
-        guard listen(fd, 8) == 0 else { Log.agents.error("bridge: listen() failed"); close(fd); return }
+        let fd = lease.fileDescriptor
+        socketLease = lease
 
         io.listenFD = fd
         io.setRunning(true)
         Log.agents.info("bridge listening")
-        Task { @MainActor [stats] in stats.markListening(true) }
+        Task { @MainActor [stats] in
+            stats.recordLifecycleFailure(nil)
+            stats.markListening(true)
+        }
 
         // Blocking accept loop on a dedicated thread — never on the actor.
         let io = self.io
@@ -138,8 +384,9 @@ actor TerminalAgentBridge {
         io.setRunning(false)
         Task { @MainActor [stats] in stats.markListening(false) }
         sweepTask?.cancel()
-        if io.listenFD >= 0 { close(io.listenFD); io.listenFD = -1 }
-        unlink(TerminalAgentProtocol.socketURL().path)
+        socketLease?.closeAndUnlink()
+        socketLease = nil
+        io.listenFD = -1
     }
 
     // MARK: Blocking I/O (background threads, nonisolated)

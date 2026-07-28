@@ -124,7 +124,15 @@ final class BridgeSocketRoundTripTests: XCTestCase {
     func testBridgeReceivesEventOverRealSocket() async throws {
         let store = AgentSessionStore(fileName: "rt-\(UUID().uuidString).json")
         let stats = TerminalBridgeStats()
-        let bridge = TerminalAgentBridge(store: store, stats: stats)
+        let directory = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("nd-roundtrip-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bridge = TerminalAgentBridge(
+            store: store,
+            stats: stats,
+            socketURL: directory.appendingPathComponent("bridge.sock")
+        )
         await bridge.start()
         defer { Task { await bridge.stop() } }
         try await Task.sleep(nanoseconds: 250_000_000)
