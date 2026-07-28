@@ -137,7 +137,7 @@ final class BridgeSocketRoundTripTests: XCTestCase {
         defer { Task { await bridge.stop() } }
         try await Task.sleep(nanoseconds: 250_000_000)
 
-        let path = await bridge.socketPath
+        let path = bridge.socketPath
         let fd = Self.connectClient(path)
         XCTAssertGreaterThanOrEqual(fd, 0, "client socket connect failed")
 

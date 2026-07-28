@@ -137,6 +137,12 @@ struct TerminalIntegrationView: View {
                 .font(.caption2).foregroundStyle(.secondary)
             Text("Last connected session: \(stats.lastConnectedTitle)")
                 .font(.caption2).foregroundStyle(.secondary)
+            if let lifecycleError = stats.lastLifecycleError {
+                Text(lifecycleError)
+                    .font(.caption2)
+                    .foregroundStyle(DesignTokens.Palette.statusAttention)
+                    .textSelection(.enabled)
+            }
         }
     }
 
@@ -152,7 +158,6 @@ struct TerminalIntegrationView: View {
         do {
             let plan = try HookInstaller.install(provider)
             message = "Installed. Backup: \(plan.backupPath ?? "none (new file)"). Restart your terminal sessions to connect."
-            Task { await env.terminalBridge.start() }
         } catch {
             message = error.localizedDescription
             if provider == .codex { settings.settings.codexTerminalIntegration = false }
@@ -195,7 +200,7 @@ struct TerminalIntegrationView: View {
                 if testing { ProgressView().controlSize(.small) }
             }
             .controlSize(.small)
-            Text("Runs the installed helper through the real socket with synthetic input — separating an app/bridge/helper failure from a Claude/Codex hook-execution failure.")
+            Text("Reads the installed config, helper, bridge state and observed traffic. It never installs, starts or injects a synthetic session.")
                 .font(.caption2).foregroundStyle(.tertiary)
 
             if let result = selfTest {

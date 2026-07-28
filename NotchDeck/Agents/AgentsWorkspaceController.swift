@@ -1,18 +1,16 @@
 import Foundation
 import Combine
 
-/// Connects the Agents module's single enablement state to the real lifecycle of
-/// the agent runtime. It is the ONE place that starts/stops agent runtime work,
-/// so no unrelated view toggles services.
+/// Connects the Agents module's single enablement state to monitoring and UI
+/// availability. The bridge socket itself is an app lifecycle invariant owned
+/// by AppDelegate, so no preference or view can suppress bootstrap.
 ///
 /// Lifecycle policy (conservative):
 /// - Installed hooks, backups and persisted session data are NEVER touched here.
-/// - Enabled: run terminal-presence + external-window monitoring, mark the bridge
-///   UI-available, and (if a terminal integration is installed) ensure the hook
-///   socket is listening. `bridge.start()` and the monitoring starters are
-///   idempotent, so repeated enables create no duplicate listeners.
-/// - Disabled: stop monitoring and suppress compact activity, but KEEP the hook
-///   socket listening as a minimal responder that immediately releases incoming
+/// - Enabled: run process, terminal-presence and external-window monitoring and
+///   mark the bridge UI-available.
+/// - Disabled: stop monitoring and suppress compact activity. AppDelegate keeps
+///   the hook socket listening as a minimal responder that immediately releases incoming
 ///   synchronous permission requests to the native terminal prompt — so a hook
 ///   can never hang waiting for an absent UI.
 @MainActor
@@ -96,9 +94,8 @@ final class AgentsWorkspaceController {
 
         store.compactSuppressed = !enabled
 
-        // The hook socket runs whenever a terminal integration is installed,
-        // regardless of the module toggle, so synchronous hooks are always
-        // answered (with the native fallback while the UI is disabled).
+        // Configure handling and UI availability only. Socket bootstrap is
+        // unconditional and belongs to AppDelegate.
         let s = settings.settings
         Task {
             await bridge.configure(
@@ -107,9 +104,6 @@ final class AgentsWorkspaceController {
                 approvalLifetime: s.approvalAvailability.seconds
             )
             await bridge.setUIAvailable(enabled)
-            if s.codexTerminalIntegration || s.claudeTerminalIntegration {
-                await bridge.start()   // idempotent
-            }
         }
 
         if enabled {

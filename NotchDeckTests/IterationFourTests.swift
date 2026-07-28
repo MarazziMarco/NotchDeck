@@ -92,6 +92,33 @@ final class CompactPomodoroTests: XCTestCase {
 }
 
 final class HookDiagnosticsTests: XCTestCase {
+    @MainActor
+    func testSelfTestEvaluatesReadOnlySnapshotWithoutRepairingIt() {
+        let result = TerminalSelfTest.evaluate(.init(
+            provider: .codex,
+            configInstalled: false,
+            commandValid: true,
+            helperPath: "/tmp/missing-helper",
+            helperExists: false,
+            helperExecutable: false,
+            bridgeListening: false,
+            lifecycleError: "bind failed: EACCES",
+            rawConnections: 0,
+            decodedEvents: 0,
+            connectedSessions: 0,
+            storeSessions: 0,
+            uiObservedSessions: 0
+        ))
+
+        XCTAssertEqual(result.firstFailing?.name, "config contains hook")
+        XCTAssertTrue(result.stages.contains {
+            $0.name == "bridge lifecycle healthy"
+                && $0.ok == false
+                && $0.detail == "bind failed: EACCES"
+        })
+        XCTAssertEqual(result.stages.count, TerminalSelfTest.stageNames.count)
+    }
+
     func testValidationReportsSocketState() {
         let offline = HookInstaller.validate(.codex, socketExists: false)
         XCTAssertTrue(offline.contains { $0.name == "Bridge socket" && !$0.ok })

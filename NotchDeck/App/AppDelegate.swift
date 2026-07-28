@@ -17,6 +17,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let environment = AppEnvironment()
         AppEnvironment.shared = environment
 
+        // Socket availability is an application lifecycle invariant, independent
+        // of installed-hook preference flags and independent of every view.
+        Task { await environment.terminalBridge.start() }
+
         // Dock icon hidden by default; a diagnostics toggle can show it.
         NSApp.setActivationPolicy(environment.settings.settings.showDockIcon ? .regular : .accessory)
 
@@ -39,9 +43,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeys.start()
         self.hotkeys = hotkeys
 
-        // Wire the terminal bridge into the coordinator, then let the Agents
-        // workspace controller own the runtime lifecycle (socket, monitoring,
-        // compact suppression, native fallback) based on the module toggle.
+        // Wire the terminal bridge into the coordinator. The workspace owns
+        // process/window monitoring and UI availability; AppDelegate owns the
+        // socket lifecycle above.
         environment.agents.terminalBridge = environment.terminalBridge
         environment.agentsWorkspace.start()
 
