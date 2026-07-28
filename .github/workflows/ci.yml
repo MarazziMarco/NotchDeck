@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & Test (macOS)
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Verify required documentation
+        run: |
+          set -e
+          required=(
+            README.md LICENSE CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md
+            CHANGELOG.md
+            docs/ARCHITECTURE.md docs/AGENT_INTEGRATION.md docs/TROUBLESHOOTING.md
+            docs/modules/README.md docs/modules/CREATING_A_MODULE.md
+            docs/modules/MODULE_REVIEW_GUIDELINES.md
+          )
+          missing=0
+          for f in "${required[@]}"; do
+            if [ ! -f "$f" ]; then echo "::error::missing required doc: $f"; missing=1; fi
+          done
+          exit $missing
+
+      - name: Build (Debug, code signing disabled)
+        run: |
+          xcodebuild -project NotchDeck.xcodeproj -scheme NotchDeck \
+            -configuration Debug -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+
+      - name: Test
+        run: |
+          xcodebuild -project NotchDeck.xcodeproj -scheme NotchDeck \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO test
+
+      - name: Build (Release, code signing disabled)
+        run: |
+          xcodebuild -project NotchDeck.xcodeproj -scheme NotchDeck \
+            -configuration Release -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build

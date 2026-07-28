@@ -20,6 +20,7 @@ final class AgentsWorkspaceController {
     private struct BridgeConfiguration: Equatable {
         let mode: AgentPermissionHandlingMode
         let fallbackDelay: TimeInterval
+        let approvalLifetime: TimeInterval
     }
 
     private let settings: SettingsStore
@@ -51,7 +52,8 @@ final class AgentsWorkspaceController {
             .map {
                 BridgeConfiguration(
                     mode: $0.agentPermissionHandlingMode,
-                    fallbackDelay: $0.terminalFallbackDelay.seconds
+                    fallbackDelay: $0.terminalFallbackDelay.seconds,
+                    approvalLifetime: $0.approvalAvailability.seconds
                 )
             }
             .removeDuplicates()
@@ -61,7 +63,8 @@ final class AgentsWorkspaceController {
                 Task {
                     await self.bridge.configure(
                         mode: configuration.mode,
-                        fallbackDelay: configuration.fallbackDelay
+                        fallbackDelay: configuration.fallbackDelay,
+                        approvalLifetime: configuration.approvalLifetime
                     )
                 }
             }
@@ -81,7 +84,8 @@ final class AgentsWorkspaceController {
         Task {
             await bridge.configure(
                 mode: s.agentPermissionHandlingMode,
-                fallbackDelay: s.terminalFallbackDelay.seconds
+                fallbackDelay: s.terminalFallbackDelay.seconds,
+                approvalLifetime: s.approvalAvailability.seconds
             )
             await bridge.setUIAvailable(enabled)
             if s.codexTerminalIntegration || s.claudeTerminalIntegration {

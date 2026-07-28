@@ -88,6 +88,9 @@ struct AppSettings: Codable, Equatable {
     var showDeveloperModules: Bool = false
     /// System Pulse (community module) configuration.
     var systemPulse: SystemPulseSettings = .default
+    /// Utilities → More dashboard layout (order + per-module size). Independent of
+    /// Home; never mixes with editorial/home fields. Placement = `moduleEnabled`.
+    var moreLayout: MoreLayoutSettings = .init()
 
     // Home dashboard (nil = use per-module defaults on first run)
     var homeFavorites: [String]? = nil            // module ids shown on Home, in order
@@ -182,6 +185,10 @@ struct AppSettings: Codable, Equatable {
     // Agents — monitor / approval UX
     var agentPermissionHandlingMode: AgentPermissionHandlingMode = .notchWithTerminalFallback
     var terminalFallbackDelay: TerminalFallbackDelay = .s8
+    /// How long a mirrored approval stays actionable in NotchDeck (default 60s).
+    /// Terminal remains answerable throughout. Existing pending transactions keep
+    /// the deadline assigned when they arrived; only new requests use a new value.
+    var approvalAvailability: ApprovalAvailability = .default
     var recentSessionLimit: RecentSessionLimit = .ten
     var showCompletedSessions: Bool = true
     var showFailedSessions: Bool = true

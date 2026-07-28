@@ -463,6 +463,29 @@ enum TerminalFallbackDelay: String, Codable, CaseIterable, Identifiable {
     var label: String { "\(Int(seconds)) seconds" }
 }
 
+/// How long a mirrored approval stays actionable in NotchDeck. The same request
+/// is answerable in Terminal the whole time — this is NOT "time before the
+/// terminal prompt appears". A discrete set of choices (no continuous slider).
+enum ApprovalAvailability: String, Codable, CaseIterable, Identifiable {
+    case s30, s60, s90, s120, s300
+    var id: String { rawValue }
+    static let `default`: ApprovalAvailability = .s60
+    var seconds: TimeInterval {
+        switch self {
+        case .s30: return 30; case .s60: return 60; case .s90: return 90
+        case .s120: return 120; case .s300: return 300
+        }
+    }
+    /// Localised, human-readable duration (minutes shown as minutes).
+    var label: String {
+        let f = DateComponentsFormatter()
+        f.allowedUnits = [.minute, .second]
+        f.unitsStyle = .full
+        f.zeroFormattingBehavior = .dropAll
+        return f.string(from: seconds) ?? "\(Int(seconds)) seconds"
+    }
+}
+
 // MARK: - Approval classification & pending model
 
 /// Classifies incoming bridge events strictly: only a genuine PermissionRequest
