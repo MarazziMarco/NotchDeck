@@ -160,4 +160,87 @@ final class MoreLayoutTests: XCTestCase {
         // Size/order preserved for return.
         XCTAssertTrue(store.settings.moreLayout.order?.contains("community.system-pulse") ?? false)
     }
+
+    func testPlacementIsMoreSpecificAndIndependentFromGlobalEnablement() {
+        var layout = MoreLayoutSettings(
+            order: ["community.system-pulse", "battery"],
+            sizes: [:],
+            placedIDs: ["battery"]
+        )
+        MoreLayoutNormalizer.normalize(&layout, definitions: defs)
+        XCTAssertEqual(
+            MoreLayoutNormalizer.placedOrder(layout, definitions: defs),
+            ["battery"]
+        )
+        MoreLayoutEditor.add("community.system-pulse", to: &layout, definitions: defs)
+        MoreLayoutEditor.add("community.system-pulse", to: &layout, definitions: defs)
+        XCTAssertEqual(layout.placedIDs?.filter { $0 == "community.system-pulse" }.count, 1)
+        MoreLayoutEditor.remove("community.system-pulse", from: &layout, definitions: defs)
+        XCTAssertFalse(layout.placedIDs?.contains("community.system-pulse") ?? true)
+        XCTAssertTrue(layout.order?.contains("community.system-pulse") ?? false)
+    }
+
+    func testRestoreDefaultsUsesDescriptorPlacementMetadata() {
+        let defaults = [
+            MoreModuleDescriptor(
+                id: "system",
+                name: "System",
+                summary: "",
+                iconSystemName: "waveform",
+                source: .community,
+                supportedSizes: [.wide],
+                defaultSize: .wide,
+                defaultPlaced: true,
+                defaultOrder: 0
+            ),
+            MoreModuleDescriptor(
+                id: "optional",
+                name: "Optional",
+                summary: "",
+                iconSystemName: "puzzlepiece",
+                source: .community,
+                supportedSizes: [.wide],
+                defaultSize: .wide,
+                defaultPlaced: false,
+                defaultOrder: 1
+            )
+        ]
+        var layout = MoreLayoutSettings(
+            order: ["optional"],
+            sizes: ["optional": .wide],
+            placedIDs: ["optional"]
+        )
+        MoreLayoutEditor.restoreDefaults(&layout, definitions: defaults)
+        XCTAssertEqual(layout.order, ["system", "optional"])
+        XCTAssertEqual(layout.placedIDs, ["system"])
+    }
+
+    func testVerticalGridNeverWrapsOntoOverlappingPages() {
+        let items = (0..<401).map {
+            MoreGridSolver.Item(id: "\($0)", size: .compact)
+        }
+        let result = MoreGridSolver.solve(items)
+        XCTAssertTrue(result.cells.allSatisfy { $0.page == 0 })
+        let locations = Set(result.cells.map { "\($0.col):\($0.row)" })
+        XCTAssertEqual(locations.count, items.count)
+    }
+
+    @MainActor func testMoreOrderSizeAndPlacementPersistImmediately() throws {
+        let suite = "more-persistence-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = SettingsStore(defaults: defaults)
+        store.updateMoreLayout(definitions: defs) {
+            MoreLayoutEditor.add("community.system-pulse", to: &$0.moreLayout, definitions: defs)
+            $0.moreLayout.order = ["battery", "community.system-pulse"]
+            $0.moreLayout.sizes["community.system-pulse"] = .large
+        }
+
+        let reloaded = SettingsStore(defaults: defaults)
+        XCTAssertEqual(reloaded.settings.moreLayout.order, ["battery", "community.system-pulse"])
+        XCTAssertEqual(reloaded.settings.moreLayout.sizes["community.system-pulse"], .large)
+        XCTAssertTrue(
+            reloaded.settings.moreLayout.placedIDs?.contains("community.system-pulse") == true
+        )
+    }
 }

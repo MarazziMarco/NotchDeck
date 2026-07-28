@@ -77,7 +77,12 @@ struct MoreModuleLibraryView: View {
 
     private func toggle(_ d: MoreModuleDescriptor, add: Bool) {
         settings.updateMoreLayout(definitions: definitions) {
-            $0.moduleEnabled[d.id] = add
+            if add {
+                $0.moduleEnabled[d.id] = true
+                MoreLayoutEditor.add(d.id, to: &$0.moreLayout, definitions: definitions)
+            } else {
+                MoreLayoutEditor.remove(d.id, from: &$0.moreLayout, definitions: definitions)
+            }
         }
     }
 }

@@ -25,13 +25,16 @@ enum MoreCatalog {
         // Community first (registration order).
         for module in community.modules {
             let d = module.descriptor
+            guard ModuleSurfaceRouting.rendersInMore(d, source: .community) else { continue }
             let desc = MoreModuleDescriptor(
                 id: d.identifier, name: d.displayName, summary: d.summary,
                 iconSystemName: d.iconSystemName, source: .community,
                 supportedSizes: MoreModuleEligibility.supportedSizes(for: .community),
-                defaultSize: MoreModuleEligibility.defaultSize(for: .community))
+                defaultSize: MoreModuleEligibility.defaultSize(for: .community),
+                defaultPlaced: d.identifier == SystemPulseModule.descriptor.identifier,
+                defaultOrder: out.count)
             out.append(MoreModuleView(descriptor: desc) { _ in
-                module.homeCard() ?? AnyView(EmptyView())
+                module.moreCard() ?? AnyView(EmptyView())
             })
         }
 
@@ -41,7 +44,9 @@ enum MoreCatalog {
                 id: module.id, name: module.displayName, summary: "",
                 iconSystemName: module.iconName, source: .builtIn,
                 supportedSizes: MoreModuleEligibility.supportedSizes(for: .builtIn),
-                defaultSize: MoreModuleEligibility.defaultSize(for: .builtIn))
+                defaultSize: MoreModuleEligibility.defaultSize(for: .builtIn),
+                defaultPlaced: true,
+                defaultOrder: out.count)
             out.append(MoreModuleView(descriptor: desc) { size in
                 module.makeDashboardCard(size: dashboardSize(size))
             })
@@ -53,11 +58,17 @@ enum MoreCatalog {
         views(registry: registry, community: community).map(\.descriptor)
     }
 
-    /// Whether a module is currently placed (enabled) in More. Uses the shared
-    /// authoritative `moduleEnabled` flag, defaulting to each descriptor's source.
+    /// More-specific placement, additionally gated by global module availability.
     static func isPlaced(_ descriptor: MoreModuleDescriptor, settings: AppSettings) -> Bool {
-        // Community modules ship disabled; built-in `.more` modules default enabled.
-        let def = descriptor.source == .builtIn
-        return ModuleEnablement.isEnabled(descriptor.id, defaultEnabled: def, settings: settings)
+        var layout = settings.moreLayout
+        if layout.placedIDs == nil {
+            layout.placedIDs = MoreLayoutNormalizer.defaultOrder([descriptor]).filter {
+                settings.moduleEnabled[$0] ?? descriptor.defaultPlaced
+            }
+        }
+        MoreLayoutNormalizer.normalize(&layout, definitions: [descriptor])
+        let placed = layout.placedIDs?.contains(descriptor.id) == true
+        let globallyAvailable = settings.moduleEnabled[descriptor.id] ?? true
+        return placed && globallyAvailable
     }
 }

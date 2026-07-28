@@ -2,12 +2,9 @@ import Foundation
 
 // MARK: - More layout model (independent of Home)
 //
-// Placement authority: a module is "placed in More" iff it is eligible AND
-// enabled (`AppSettings.moduleEnabled[id]`) — the SAME shared flag Settings →
-// Modules toggles. This is intentional so enabling System Pulse in Settings and
-// "Add" in the More Module Library are one action, with no duplicate placement
-// state. The new `AppSettings.moreLayout` stores ONLY More-specific order + size;
-// it never reads or writes any Home field.
+// Placement authority is `MoreLayoutSettings.placedIDs`. Global module
+// enablement may make a module unavailable, but never decides its More position.
+// Order, size and placement are independent from every Home field.
 
 /// Supported More card size variants and their grid spans (2-column grid).
 enum MoreModuleSize: String, Codable, CaseIterable, Identifiable {
@@ -29,6 +26,30 @@ struct MoreModuleDescriptor: Equatable, Identifiable {
     let source: ModuleSource            // .builtIn or .community
     let supportedSizes: [MoreModuleSize]
     let defaultSize: MoreModuleSize
+    let defaultPlaced: Bool
+    let defaultOrder: Int
+
+    init(
+        id: String,
+        name: String,
+        summary: String,
+        iconSystemName: String,
+        source: ModuleSource,
+        supportedSizes: [MoreModuleSize],
+        defaultSize: MoreModuleSize,
+        defaultPlaced: Bool? = nil,
+        defaultOrder: Int = 0
+    ) {
+        self.id = id
+        self.name = name
+        self.summary = summary
+        self.iconSystemName = iconSystemName
+        self.source = source
+        self.supportedSizes = supportedSizes
+        self.defaultSize = defaultSize
+        self.defaultPlaced = defaultPlaced ?? (source == .builtIn)
+        self.defaultOrder = defaultOrder
+    }
 
     func normalizedSize(_ requested: MoreModuleSize?) -> MoreModuleSize {
         if let requested, supportedSizes.contains(requested) { return requested }
@@ -36,11 +57,13 @@ struct MoreModuleDescriptor: Equatable, Identifiable {
     }
 }
 
-/// Persisted More layout: ONLY order + per-module size. Placement (in/out of More)
-/// is the shared `moduleEnabled` flag. Completely independent of Home persistence.
+/// Persisted More layout: order, per-module size and More-specific placement.
+/// Completely independent of Home persistence.
 struct MoreLayoutSettings: Codable, Equatable {
     var order: [String]? = nil
     var sizes: [String: MoreModuleSize] = [:]
+    /// More-specific placement. Nil is the pre-library migration state.
+    var placedIDs: [String]? = nil
 }
 
 /// Which modules may appear on More, derived from the authoritative registries —
@@ -67,7 +90,15 @@ enum MoreLayoutNormalizer {
     /// built-in More modules, as provided by the eligible descriptor list.
     static func defaultOrder(_ definitions: [MoreModuleDescriptor]) -> [String] {
         var seen = Set<String>()
-        return definitions.map(\.id).filter { seen.insert($0).inserted }
+        return definitions.enumerated()
+            .sorted {
+                if $0.element.defaultOrder == $1.element.defaultOrder {
+                    return $0.offset < $1.offset
+                }
+                return $0.element.defaultOrder < $1.element.defaultOrder
+            }
+            .map(\.element.id)
+            .filter { seen.insert($0).inserted }
     }
 
     static func normalize(_ layout: inout MoreLayoutSettings, definitions: [MoreModuleDescriptor]) {
@@ -80,6 +111,13 @@ enum MoreLayoutNormalizer {
         var order = (layout.order ?? []).filter { eligible.contains($0) && seen.insert($0).inserted }
         for id in defaultOrder(definitions) where !seen.contains(id) { order.append(id); seen.insert(id) }
         layout.order = order
+
+        var placedSeen = Set<String>()
+        let initialPlaced = layout.placedIDs
+            ?? definitions.filter(\.defaultPlaced).map(\.id)
+        layout.placedIDs = initialPlaced.filter {
+            eligible.contains($0) && placedSeen.insert($0).inserted
+        }
 
         // Sizes: drop unknown ids; clamp each to the module's supported sizes.
         var sizes: [String: MoreModuleSize] = [:]
@@ -96,18 +134,69 @@ enum MoreLayoutNormalizer {
         return copy != layout
     }
 
-    /// Order of the modules currently PLACED (eligible + enabled), normalized.
-    static func placedOrder(_ layout: MoreLayoutSettings, definitions: [MoreModuleDescriptor],
-                            isEnabled: (String) -> Bool) -> [String] {
+    /// Order of the modules currently placed in More, normalized.
+    static func placedOrder(_ layout: MoreLayoutSettings, definitions: [MoreModuleDescriptor]) -> [String] {
         var copy = layout
         normalize(&copy, definitions: definitions)
-        return (copy.order ?? []).filter(isEnabled)
+        let placed = Set(copy.placedIDs ?? [])
+        return (copy.order ?? []).filter(placed.contains)
+    }
+
+    /// Compatibility overload: global enablement may suppress an unavailable
+    /// module, but it is never the More placement authority.
+    static func placedOrder(_ layout: MoreLayoutSettings, definitions: [MoreModuleDescriptor],
+                            isEnabled: (String) -> Bool) -> [String] {
+        placedOrder(layout, definitions: definitions).filter(isEnabled)
     }
 
     static func size(_ id: String, in layout: MoreLayoutSettings,
                      definitions: [MoreModuleDescriptor]) -> MoreModuleSize {
         let d = definitions.first { $0.id == id }
         return d?.normalizedSize(layout.sizes[id]) ?? .wide
+    }
+}
+
+enum MoreLayoutEditor {
+    static func add(_ id: String, to layout: inout MoreLayoutSettings,
+                    definitions: [MoreModuleDescriptor]) {
+        MoreLayoutNormalizer.normalize(&layout, definitions: definitions)
+        guard definitions.contains(where: { $0.id == id }) else { return }
+        var placed = layout.placedIDs ?? []
+        if !placed.contains(id) { placed.append(id) }
+        layout.placedIDs = placed
+    }
+
+    static func remove(_ id: String, from layout: inout MoreLayoutSettings,
+                       definitions: [MoreModuleDescriptor]) {
+        MoreLayoutNormalizer.normalize(&layout, definitions: definitions)
+        layout.placedIDs?.removeAll { $0 == id }
+    }
+
+    static func restoreDefaults(_ layout: inout MoreLayoutSettings,
+                                definitions: [MoreModuleDescriptor]) {
+        layout.order = defaultOrderedIDs(definitions)
+        layout.sizes = [:]
+        layout.placedIDs = definitions.filter(\.defaultPlaced).map(\.id)
+        MoreLayoutNormalizer.normalize(&layout, definitions: definitions)
+    }
+
+    static func move(_ id: String, by delta: Int, in layout: inout MoreLayoutSettings,
+                     definitions: [MoreModuleDescriptor]) {
+        MoreLayoutNormalizer.normalize(&layout, definitions: definitions)
+        var fullOrder = layout.order ?? []
+        let placed = MoreLayoutNormalizer.placedOrder(layout, definitions: definitions)
+        guard let placedIndex = placed.firstIndex(of: id) else { return }
+        let targetIndex = max(0, min(placed.count - 1, placedIndex + delta))
+        guard targetIndex != placedIndex else { return }
+        let targetID = placed[targetIndex]
+        guard let source = fullOrder.firstIndex(of: id),
+              let target = fullOrder.firstIndex(of: targetID) else { return }
+        fullOrder.swapAt(source, target)
+        layout.order = fullOrder
+    }
+
+    private static func defaultOrderedIDs(_ definitions: [MoreModuleDescriptor]) -> [String] {
+        MoreLayoutNormalizer.defaultOrder(definitions)
     }
 }
 
@@ -126,10 +215,11 @@ enum MoreGridSolver {
     }
 
     static func solve(_ items: [Item], columns: Int = MoreGridSolver.columns) -> GridSolver.Result {
-        GridSolver.solve(
+        let requiredRows = max(1, items.reduce(0) { $0 + $1.size.h })
+        return GridSolver.solve(
             items: items.map { GridSolver.Item(id: $0.id, w: min($0.size.w, columns), h: $0.size.h) },
             columns: columns,
-            maxRows: 200)   // More scrolls vertically; no hard page cap
+            maxRows: requiredRows)   // More scrolls vertically; never wraps to overlapping pages
     }
 
     static func overlaps(_ a: GridCell, _ b: GridCell) -> Bool { GridSolver.overlaps(a, b) }

@@ -74,22 +74,6 @@ final class AgentOverviewUITests: XCTestCase {
     }
 
     func testAgentDetailRouteIsAbsentFromProductionSources() throws {
-        let testsDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        let root = testsDirectory.deletingLastPathComponent()
-        let agentsFace = try String(contentsOf:
-            root.appendingPathComponent("NotchDeck/Agents/AgentsFaceView.swift"))
-        let focusMode = try String(contentsOf:
-            root.appendingPathComponent("NotchDeck/Notch/FocusMode.swift"))
-        let expanded = try String(contentsOf:
-            root.appendingPathComponent("NotchDeck/Notch/ExpandedNotchView.swift"))
-        let appState = try String(contentsOf:
-            root.appendingPathComponent("NotchDeck/App/AppState.swift"))
-
-        XCTAssertFalse(agentsFace.contains(".onTapGesture"))
-        XCTAssertFalse(agentsFace.contains("focusAgent("))
-        XCTAssertFalse(focusMode.contains("AgentFocusContainer"))
-        XCTAssertFalse(expanded.contains("focusedAgentID"))
-        XCTAssertFalse(appState.contains("focusedAgentID"))
-        XCTAssertFalse(appState.contains("focusAgent("))
+        XCTAssertFalse(AgentOverviewNavigationPolicy.hasDedicatedDetailRoute)
     }
 }

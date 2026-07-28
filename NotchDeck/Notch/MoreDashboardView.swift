@@ -2,8 +2,8 @@ import SwiftUI
 
 /// The Utilities → More dashboard: a customizable 2-column grid of More-eligible
 /// built-in + community modules. Its "Open Module Library" manages ONLY More — it
-/// never touches Home. Placement uses the shared `moduleEnabled` flag; order and
-/// size live in the independent `AppSettings.moreLayout`.
+/// never touches Home. Placement, order and size live in the independent
+/// `AppSettings.moreLayout`.
 struct MoreDashboardView: View {
     @EnvironmentObject private var registry: ModuleRegistry
     @EnvironmentObject private var community: CommunityModuleRegistry
@@ -146,14 +146,13 @@ struct MoreDashboardView: View {
         settings.updateMoreLayout(definitions: definitions) { $0.moreLayout.sizes[id] = s }
     }
     private func remove(_ id: String) {
-        settings.updateMoreLayout(definitions: definitions) { $0.moduleEnabled[id] = false }
+        settings.updateMoreLayout(definitions: definitions) {
+            MoreLayoutEditor.remove(id, from: &$0.moreLayout, definitions: definitions)
+        }
     }
     private func move(_ id: String, by delta: Int) {
         settings.updateMoreLayout(definitions: definitions) {
-            var order = $0.moreLayout.order ?? []
-            guard let i = order.firstIndex(of: id) else { return }
-            let j = max(0, min(order.count - 1, i + delta))
-            order.swapAt(i, j); $0.moreLayout.order = order
+            MoreLayoutEditor.move(id, by: delta, in: &$0.moreLayout, definitions: definitions)
         }
     }
     private func move(_ dragID: String, before targetID: String) {
@@ -169,9 +168,7 @@ struct MoreDashboardView: View {
     private func restoreDefault() {
         let defs = definitions
         settings.updateMoreLayout(definitions: defs) {
-            $0.moreLayout.order = MoreLayoutNormalizer.defaultOrder(defs)
-            $0.moreLayout.sizes = [:]
-            for d in defs { $0.moduleEnabled[d.id] = true }   // default = all eligible placed
+            MoreLayoutEditor.restoreDefaults(&$0.moreLayout, definitions: defs)
         }
     }
 
@@ -219,14 +216,14 @@ struct MoreCardHost: View {
         module.card(size)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .clipped()
+            .allowsHitTesting(!editing)
             .background(DesignTokens.Palette.cardFill,
                         in: RoundedRectangle(cornerRadius: DesignTokens.Metrics.cardCornerRadius, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: DesignTokens.Metrics.cardCornerRadius, style: .continuous)
                 .strokeBorder(editing ? DesignTokens.Palette.statusRunning.opacity(0.5) : DesignTokens.Palette.hairline,
                               lineWidth: editing ? 1 : 0.6))
             .overlay(alignment: .topTrailing) { if editing { editChrome } }
-            .allowsHitTesting(!editing)   // editing disables normal controls (drag/resize instead)
-            .accessibilityElement(children: editing ? .ignore : .contain)
+            .accessibilityElement(children: .contain)
             .accessibilityLabel(Text("\(module.descriptor.name), \(module.descriptor.source.label) module, \(size.label)"))
             .accessibilityHint(editing ? Text("Use the size and move controls") : Text(""))
     }
@@ -234,8 +231,8 @@ struct MoreCardHost: View {
     private var editChrome: some View {
         HStack(spacing: 5) {
             // Keyboard/VoiceOver reorder alternatives to drag.
-            iconButton("chevron.up", "Move up", onMoveUp)
-            iconButton("chevron.down", "Move down", onMoveDown)
+            iconButton("chevron.up", "Move \(module.descriptor.name) up", onMoveUp)
+            iconButton("chevron.down", "Move \(module.descriptor.name) down", onMoveDown)
             if canResize {
                 Menu {
                     ForEach(module.descriptor.supportedSizes) { s in

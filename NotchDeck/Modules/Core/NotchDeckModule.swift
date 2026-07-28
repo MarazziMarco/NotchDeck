@@ -136,6 +136,8 @@ protocol NotchDeckModule {
 
     /// Home card view (only called when `.homeCard` is a declared surface).
     func homeCard(context: ModuleContext) -> AnyView?
+    /// More dashboard card (only called when `.more` is declared).
+    func moreCard(context: ModuleContext) -> AnyView?
     /// Expanded dedicated tab view (only for `.expandedTab`).
     func expandedView(context: ModuleContext) -> AnyView?
     /// Settings section (only when `hasSettings` / `.settingsSection`).
@@ -145,6 +147,7 @@ protocol NotchDeckModule {
 /// Sensible defaults so modules implement only what they need.
 extension NotchDeckModule {
     func homeCard(context: ModuleContext) -> AnyView? { nil }
+    func moreCard(context: ModuleContext) -> AnyView? { nil }
     func expandedView(context: ModuleContext) -> AnyView? { nil }
     func settingsView(context: ModuleContext) -> AnyView? { nil }
 }
@@ -155,12 +158,14 @@ extension NotchDeckModule {
 struct AnyNotchDeckModule {
     let descriptor: ModuleDescriptor
     private let _homeCard: (ModuleContext) -> AnyView?
+    private let _moreCard: (ModuleContext) -> AnyView?
     private let _expandedView: (ModuleContext) -> AnyView?
     private let _settingsView: (ModuleContext) -> AnyView?
 
     init<M: NotchDeckModule>(_ module: M) {
         self.descriptor = M.descriptor
         self._homeCard = module.homeCard
+        self._moreCard = module.moreCard
         self._expandedView = module.expandedView
         self._settingsView = module.settingsView
     }
@@ -169,6 +174,7 @@ struct AnyNotchDeckModule {
     var context: ModuleContext { ModuleContext(granted: descriptor.capabilities) }
 
     func homeCard() -> AnyView? { _homeCard(context) }
+    func moreCard() -> AnyView? { _moreCard(context) }
     func expandedView() -> AnyView? { _expandedView(context) }
     func settingsView() -> AnyView? { _settingsView(context) }
 }

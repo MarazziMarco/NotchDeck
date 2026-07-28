@@ -242,12 +242,13 @@ final class AgentCoordinator: ObservableObject {
     /// helper exit, and provider progression remain distinct truthful states.
     /// A decision after fallback/expiry is rejected.
     func decide(session: AgentSession, allow: Bool) async {
-        // Reject a late click: only a live pending approval may be decided.
+        // Reject stale-card, duplicate and deadline-racing clicks atomically at
+        // the coordinator boundary. Never rewrite an in-flight transaction.
         guard let current = store.session(id: session.id),
-              current.approval?.state == .pending else {
-            store.update(id: session.id) {
-                if $0.approval?.state == .fellBack {} else { $0.approval?.state = .expired }
-            }
+              let presented = session.approval,
+              let approval = current.approval,
+              approval.requestID == presented.requestID,
+              approval.isActionable(now: Date()) else {
             return
         }
         guard current.isBridgeConnected, let rid = current.pendingApprovalRequestID else {

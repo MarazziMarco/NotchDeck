@@ -88,8 +88,8 @@ struct AppSettings: Codable, Equatable {
     var showDeveloperModules: Bool = false
     /// System Pulse (community module) configuration.
     var systemPulse: SystemPulseSettings = .default
-    /// Utilities → More dashboard layout (order + per-module size). Independent of
-    /// Home; never mixes with editorial/home fields. Placement = `moduleEnabled`.
+    /// Utilities → More dashboard layout (placement, order and per-module size).
+    /// Independent of Home; never mixes with editorial/home fields.
     var moreLayout: MoreLayoutSettings = .init()
 
     // Home dashboard (nil = use per-module defaults on first run)

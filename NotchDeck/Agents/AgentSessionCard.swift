@@ -33,7 +33,7 @@ struct AgentCardPresentation: Equatable {
         case .delivered: state = "Continued"
         case .deliveryFailed: state = "Delivery failed"
         case .fellBack: state = "Respond in Terminal"
-        case .expired: state = "Request expired"
+        case .expired: state = "Respond in Terminal"
         case .cancelled: state = "Cancelled"
         case .answered: state = "Answered"
         case .none: state = session.status.label
@@ -52,7 +52,7 @@ struct AgentCardPresentation: Equatable {
         case .sent, .providerOutputClosed, .helperTerminated, .helperExited: deliveryLabel = "Sent to \(provider)"
         case .delivered: deliveryLabel = "\(provider) continued"
         case .deliveryFailed: deliveryLabel = "Delivery failed — answer in Terminal"
-        case .expired: deliveryLabel = "Request expired"
+        case .expired: deliveryLabel = "No longer actionable in NotchDeck"
         default: deliveryLabel = nil
         }
         terminalNotice = session.terminalTTY == nil ? "Terminal identifier unavailable" : nil
@@ -101,7 +101,7 @@ struct AgentSessionCard: View {
             else if deliveryState == .sent || deliveryState == .providerOutputClosed || deliveryState == .helperTerminated || deliveryState == .helperExited { statusRow(presentation.deliveryLabel ?? "Sent", "paperplane.fill", DesignTokens.Palette.secondaryText) }
             else if deliveryState == .delivered { statusRow(presentation.deliveryLabel ?? "Continued", "checkmark.circle.fill", DesignTokens.Palette.statusSuccess) }
             else if deliveryState == .deliveryFailed { statusRow("Delivery failed — answer in Terminal", "exclamationmark.triangle.fill", DesignTokens.Palette.statusFailure) }
-            else if deliveryState == .expired { statusRow("Request expired", "clock.badge.xmark", DesignTokens.Palette.tertiaryText) }
+            else if deliveryState == .expired { statusRow("No longer actionable in NotchDeck", "clock.badge.xmark", DesignTokens.Palette.tertiaryText) }
             else if fellBack { waitingInTerminalRow }
             if session.queuedApprovalCount > 0 {
                 Label("\(session.queuedApprovalCount) more permission request\(session.queuedApprovalCount == 1 ? "" : "s") waiting",
@@ -207,13 +207,13 @@ struct AgentSessionCard: View {
                 if let deadline = session.approval?.fallbackDeadline {
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         Label(
-                            "Terminal prompt in \(secondsRemaining(deadline, now: context.date))s",
+                            "Available \(secondsRemaining(deadline, now: context.date))s",
                             systemImage: "timer"
                         )
                         .font(.system(size: 9.5))
                         .foregroundStyle(DesignTokens.Palette.statusAttention)
                         .accessibilityLabel(
-                            "Native Terminal prompt in \(secondsRemaining(deadline, now: context.date)) seconds"
+                            "Available in NotchDeck for \(secondsRemaining(deadline, now: context.date)) seconds; Terminal is also available"
                         )
                     }
                 }
@@ -235,7 +235,12 @@ struct AgentSessionCard: View {
     private var waitingInTerminalRow: some View {
         HStack(spacing: 6) {
             Image(systemName: "arrowshape.turn.up.forward")
-            Text("Waiting in Terminal — answer the native prompt")
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Respond in Terminal")
+                Text("No longer actionable in NotchDeck")
+                    .font(.system(size: 9))
+                    .foregroundStyle(DesignTokens.Palette.tertiaryText)
+            }
         }
         .font(.system(size: 10))
         .foregroundStyle(DesignTokens.Palette.statusAttention)

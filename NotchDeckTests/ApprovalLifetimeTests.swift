@@ -38,10 +38,9 @@ final class ApprovalLifetimeTests: XCTestCase {
             let s = TerminalAgentBridge.reduce(existing: nil, id: UUID(), event: permEvent(),
                                                handlingMode: .notchWithTerminalFallback,
                                                approvalLifetime: value.seconds, now: t0)
-            // Card stays actionable for the configured lifetime (fallback release),
-            // with a small hard-expiry safety margin past it.
+            // Card stops being actionable at exactly the configured deadline.
             XCTAssertEqual(approval(s)?.fallbackDeadline, t0.addingTimeInterval(value.seconds))
-            XCTAssertEqual(approval(s)?.expiresAt, t0.addingTimeInterval(value.seconds + 5))
+            XCTAssertEqual(approval(s)?.expiresAt, t0.addingTimeInterval(value.seconds))
         }
     }
 
@@ -100,5 +99,81 @@ final class ApprovalLifetimeTests: XCTestCase {
                                            approvalLifetime: 100_000, now: t0)
         XCTAssertEqual(approval(s)?.fallbackDeadline,
                        t0.addingTimeInterval(HookTimeouts.maxApprovalLifetimeSeconds))
+    }
+
+    func testActionabilityEndsExactlyAtAssignedDeadline() {
+        let session = TerminalAgentBridge.reduce(
+            existing: nil,
+            id: UUID(),
+            event: permEvent(),
+            handlingMode: .notchWithTerminalFallback,
+            approvalLifetime: 60,
+            now: t0
+        )
+        let pending = try! XCTUnwrap(session.approval)
+        XCTAssertTrue(pending.isActionable(now: t0.addingTimeInterval(59.999)))
+        XCTAssertFalse(pending.isActionable(now: t0.addingTimeInterval(60)))
+    }
+
+    func testOldSettingsBlobMigratesWithoutResettingUnrelatedPreferences() throws {
+        let suite = "approval-migration-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        var original = AppSettings()
+        original.hoverToOpen = false
+        original.clipboardMaxItems = 37
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(original))
+                as? [String: Any]
+        )
+        object.removeValue(forKey: "approvalAvailability")
+        object.removeValue(forKey: "moreLayout")
+        defaults.set(try JSONSerialization.data(withJSONObject: object), forKey: SettingsStore.storageKey)
+
+        let migrated = SettingsStore(defaults: defaults).settings
+        XCTAssertFalse(migrated.hoverToOpen)
+        XCTAssertEqual(migrated.clipboardMaxItems, 37)
+        XCTAssertEqual(migrated.approvalAvailability, .s60)
+        XCTAssertEqual(migrated.moreLayout, MoreLayoutSettings())
+    }
+
+    func testMirroredWordingNeverClaimsTerminalAppearsLater() {
+        XCTAssertFalse(
+            AgentPermissionHandlingMode.notchWithTerminalFallback.label
+                .localizedCaseInsensitiveContains("then Terminal")
+        )
+        XCTAssertEqual(
+            PendingApproval.availabilityStatus(isActionable: false),
+            "No longer actionable in NotchDeck"
+        )
+    }
+
+    func testQueuedExpiryIsIndependentAndNeverPromotesAStaleRequest() {
+        var session = TerminalAgentBridge.reduce(
+            existing: nil,
+            id: UUID(),
+            event: permEvent("A"),
+            handlingMode: .notchWithTerminalFallback,
+            approvalLifetime: 300,
+            now: t0
+        )
+        session = TerminalAgentBridge.reduce(
+            existing: session,
+            id: session.id,
+            event: permEvent("B"),
+            handlingMode: .notchWithTerminalFallback,
+            approvalLifetime: 30,
+            now: t0
+        )
+
+        let released = TerminalAgentBridge.expireTransactions(
+            &session,
+            now: t0.addingTimeInterval(31)
+        )
+        XCTAssertEqual(released, ["B"])
+        XCTAssertEqual(session.approval?.requestID, "A")
+        XCTAssertTrue(session.queuedApprovals?.isEmpty ?? true)
+        XCTAssertNil(session.approval?.decidedAllow)
     }
 }

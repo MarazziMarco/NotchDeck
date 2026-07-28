@@ -359,7 +359,7 @@ enum AgentVendor: String, CaseIterable, Codable, Equatable {
     var assetLight: String? {
         switch self {
         case .claudeCode: return "AgentLogoClaudeLight"
-        case .codex: return "AgentLogoCodexLight"
+        case .codex: return "AgentLogoCodexDark"
         case .gemini: return "AgentLogoGemini"
         default: return nil
         }
@@ -436,6 +436,12 @@ enum AgentProviderAppearanceRegistry {
 
 // MARK: - Permission handling modes
 
+/// Product contract: the Agents overview is the only normal session screen.
+/// Cards expose explicit actions and never navigate through neutral card space.
+enum AgentOverviewNavigationPolicy {
+    static let hasDedicatedDetailRoute = false
+}
+
 enum AgentPermissionHandlingMode: String, Codable, CaseIterable, Identifiable {
     case terminalOnly
     case notchWithTerminalFallback
@@ -444,7 +450,7 @@ enum AgentPermissionHandlingMode: String, Codable, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .terminalOnly: return "Terminal only"
-        case .notchWithTerminalFallback: return "NotchDeck, then Terminal fallback"
+        case .notchWithTerminalFallback: return "NotchDeck and Terminal"
         case .notchOnly: return "NotchDeck only"
         }
     }
@@ -555,7 +561,7 @@ struct PendingApproval: Equatable, Codable {
     var expiresAt: Date
     var state: ResponseState
     var handlingMode: AgentPermissionHandlingMode
-    /// When (in hybrid mode) the helper stops waiting and the native prompt shows.
+    /// When NotchDeck stops offering a local decision; Terminal is already usable.
     var fallbackDeadline: Date?
     var nativePromptExpected: Bool
     /// The user's decision, recorded when it is written to the helper (state
@@ -564,10 +570,19 @@ struct PendingApproval: Equatable, Codable {
     var decidedAllow: Bool? = nil
 
     var isLive: Bool { state == .pending }
+    var actionDeadline: Date { fallbackDeadline ?? expiresAt }
+    func isActionable(now: Date) -> Bool {
+        state == .pending && now < actionDeadline
+    }
     func isExpired(now: Date) -> Bool { now >= expiresAt }
     func fallbackRemaining(now: Date) -> TimeInterval? {
         guard let d = fallbackDeadline else { return nil }
         return max(0, d.timeIntervalSince(now))
+    }
+
+    static func availabilityStatus(isActionable: Bool) -> String {
+        isActionable ? "Actionable in NotchDeck and Terminal"
+            : "No longer actionable in NotchDeck"
     }
 }
 

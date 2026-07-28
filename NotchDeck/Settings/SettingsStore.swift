@@ -9,17 +9,40 @@ final class SettingsStore: ObservableObject {
     }
 
     private let defaults: UserDefaults
-    private let key = "com.notchdeck.settings.v1"
+    static let storageKey = "com.notchdeck.settings.v1"
+    private let key = SettingsStore.storageKey
     private var saveWorkItem: DispatchWorkItem?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         if let data = defaults.data(forKey: key),
-           let decoded = try? JSONDecoder().decode(AppSettings.self, from: data) {
+           let decoded = Self.decodeMigrating(data) {
             self.settings = decoded
         } else {
             self.settings = AppSettings()
         }
+    }
+
+    private static func decodeMigrating(_ data: Data) -> AppSettings? {
+        if let decoded = try? JSONDecoder().decode(AppSettings.self, from: data) {
+            return decoded
+        }
+        guard var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let defaultsData = try? JSONEncoder().encode(AppSettings()),
+              let defaultObject = try? JSONSerialization.jsonObject(with: defaultsData)
+                as? [String: Any] else {
+            return nil
+        }
+        // Additive schema migration: preserve every stored value and supply only
+        // keys introduced by newer builds. This prevents one new setting from
+        // resetting unrelated preferences.
+        for (key, value) in defaultObject where object[key] == nil {
+            object[key] = value
+        }
+        guard let migrated = try? JSONSerialization.data(withJSONObject: object) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(AppSettings.self, from: migrated)
     }
 
     /// Test/preview convenience with in-memory settings.
@@ -68,6 +91,11 @@ final class SettingsStore: ObservableObject {
     func updateMoreLayout(definitions: [MoreModuleDescriptor],
                           _ update: (inout AppSettings) -> Void) {
         var next = settings
+        if next.moreLayout.placedIDs == nil {
+            next.moreLayout.placedIDs = definitions.filter {
+                next.moduleEnabled[$0.id] ?? $0.defaultPlaced
+            }.map(\.id)
+        }
         MoreLayoutNormalizer.normalize(&next.moreLayout, definitions: definitions)
         update(&next)
         MoreLayoutNormalizer.normalize(&next.moreLayout, definitions: definitions)

@@ -20,8 +20,8 @@ struct SystemPulseModule: NotchDeckModule {
 
     init() {}
 
-    /// The module's compact card, rendered in the More → Community Modules section.
-    func homeCard(context: ModuleContext) -> AnyView? { AnyView(SystemPulseCard()) }
+    /// The module's card, rendered only in Utilities → More.
+    func moreCard(context: ModuleContext) -> AnyView? { AnyView(SystemPulseCard()) }
     func settingsView(context: ModuleContext) -> AnyView? { AnyView(SystemPulseSettingsView()) }
 }
 

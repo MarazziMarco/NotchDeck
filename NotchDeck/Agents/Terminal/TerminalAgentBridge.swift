@@ -18,6 +18,7 @@ private struct PendingApprovalConnection {
     let clientFD: Int32
     let providerRequestID: String
     let appSessionID: UUID
+    let actionableUntil: Date
 }
 
 /// Local, user-only bridge that receives real-time events from hook-connected
@@ -274,7 +275,8 @@ actor TerminalAgentBridge {
             pendingApprovals[transactionID] = PendingApprovalConnection(
                 clientFD: client,
                 providerRequestID: providerRequestID,
-                appSessionID: uuid
+                appSessionID: uuid,
+                actionableUntil: Date().addingTimeInterval(approvalLifetime)
             )
             // Agents UI disabled: do not wait for an approval UI that will never
             // appear. Release the helper at once so the provider resumes its native
@@ -295,7 +297,8 @@ actor TerminalAgentBridge {
             pendingApprovals[transactionID] = PendingApprovalConnection(
                 clientFD: client,
                 providerRequestID: providerRequestID,
-                appSessionID: uuid
+                appSessionID: uuid,
+                actionableUntil: .distantPast
             )
             releaseForFallback(requestID: transactionID)
             return
@@ -489,10 +492,9 @@ actor TerminalAgentBridge {
                 toolName: event.toolName,
                 summary: summary,
                 receivedAt: now,
-                // Hard expiry sits just past the actionable lifetime as a safety net
-                // (the fallback release normally fires first). Both stay well under
-                // the helper hard deadline.
-                expiresAt: now.addingTimeInterval(lifetime + 5),
+                // The transaction stops being actionable at exactly its assigned
+                // deadline. Transport hard deadlines remain safely beyond it.
+                expiresAt: now.addingTimeInterval(lifetime),
                 state: .pending,
                 handlingMode: handlingMode,
                 fallbackDeadline: fallbackDeadline,
@@ -626,6 +628,10 @@ actor TerminalAgentBridge {
     @discardableResult
     func respond(requestID: String, allow: Bool, message: String?) -> Bool {
         guard let connection = pendingApprovals[requestID] else { return false }
+        guard Date() < connection.actionableUntil else {
+            _ = releaseForFallback(requestID: requestID)
+            return false
+        }
         let decision = TerminalAgentDecision(requestID: connection.providerRequestID,
                                              transactionID: requestID,
                                              behavior: allow ? .allow : .deny, message: message)
@@ -715,7 +721,8 @@ actor TerminalAgentBridge {
         pendingApprovals[transactionID] = PendingApprovalConnection(
             clientFD: clientFD,
             providerRequestID: providerRequestID,
-            appSessionID: appSessionID
+            appSessionID: appSessionID,
+            actionableUntil: .distantFuture
         )
     }
     #endif
@@ -730,25 +737,8 @@ actor TerminalAgentBridge {
             let releaseRequestIDs: [String] = await MainActor.run { [store] in
                 var releases: [String] = []
                 for session in store.sessions {
-                    guard let approval = session.approval, approval.isLive else { continue }
-                    if approval.isExpired(now: now) {
-                        // Fail safe — never auto-approve. Release the matching
-                        // helper and promote an independent queued request.
-                        let rid = approval.requestID
-                        store.update(id: session.id) {
-                            Self.releaseTransaction(&$0, requestID: rid, state: .expired)
-                        }
-                        releases.append(rid)
-                    } else if let deadline = approval.fallbackDeadline, now >= deadline {
-                        let rid = approval.requestID
-                        // Hybrid deadline reached: the native terminal prompt now
-                        // owns this request. Dismiss the NotchDeck approval surface
-                        // immediately so the two never coexist, and stop any
-                        // countdown. A later stale click cannot answer it (gone).
-                        store.update(id: session.id) {
-                            Self.releaseTransaction(&$0, requestID: rid, state: .fellBack)
-                        }
-                        releases.append(rid)
+                    store.update(id: session.id) {
+                        releases.append(contentsOf: Self.expireTransactions(&$0, now: now))
                     }
                 }
                 return releases
@@ -769,5 +759,28 @@ actor TerminalAgentBridge {
                 }
             }
         }
+    }
+
+    /// Expires current and queued requests independently. Expired queued entries
+    /// are never promoted into an actionable card.
+    static func expireTransactions(_ session: inout AgentSession, now: Date) -> [String] {
+        var released: [String] = []
+        if var queued = session.queuedApprovals {
+            let stale = queued.filter { $0.isLive && !$0.isActionable(now: now) }
+            released.append(contentsOf: stale.map(\.requestID))
+            queued.removeAll { approval in stale.contains { $0.requestID == approval.requestID } }
+            session.queuedApprovals = queued.isEmpty ? nil : queued
+        }
+        while let approval = session.approval,
+              approval.isLive,
+              !approval.isActionable(now: now) {
+            released.append(approval.requestID)
+            releaseTransaction(
+                &session,
+                requestID: approval.requestID,
+                state: approval.nativePromptExpected ? .fellBack : .expired
+            )
+        }
+        return released
     }
 }
