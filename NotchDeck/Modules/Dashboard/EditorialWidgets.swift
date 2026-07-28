@@ -22,7 +22,9 @@ struct EditorialNote: View {
     @EnvironmentObject private var service: QuickNoteService
     @EnvironmentObject private var settings: SettingsStore
 
-    private var color: NoteColor { settings.settings.noteColor }
+    private var paperColor: NotePaperColor {
+        settings.settings.resolvedNotePaperColor
+    }
     private var paper: PaperStyleIntensity { settings.settings.paperStyleIntensity }
 
     var body: some View {
@@ -41,28 +43,28 @@ struct EditorialNote: View {
         ZStack(alignment: .topLeading) {
             // Full paper surface — the whole area is the note.
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(LinearGradient(colors: [color.paper, color.paper.opacity(0.9)],
+                .fill(LinearGradient(colors: [paperColor.color, paperColor.color.opacity(0.9)],
                                      startPoint: .top, endPoint: .bottom))
             if paper.showsFold {
                 Path { p in p.move(to: .zero); p.addLine(to: CGPoint(x: 16, y: 0)); p.addLine(to: CGPoint(x: 0, y: 16)) }
-                    .fill(color.ink.opacity(0.10)).frame(width: 16, height: 16)
+                    .fill(paperColor.inkColor.opacity(0.10)).frame(width: 16, height: 16)
             }
             // Editable text fills most of the sheet.
             TextEditor(text: $service.text)
                 .font(.system(size: settings.settings.noteFontSize.points, weight: .medium))
                 .scrollContentBackground(.hidden)
-                .foregroundStyle(color.ink)
-                .tint(color.ink)
+                .foregroundStyle(paperColor.inkColor)
+                .tint(paperColor.inkColor)
                 .padding(10)
                 .overlay(alignment: .topLeading) {
                     if service.isEmpty {
                         Text("Jot a note…").font(.system(size: settings.settings.noteFontSize.points, weight: .medium))
-                            .foregroundStyle(color.ink.opacity(0.4)).padding(14).allowsHitTesting(false)
+                            .foregroundStyle(paperColor.inkColor.opacity(0.4)).padding(14).allowsHitTesting(false)
                     }
                 }
             if settings.settings.noteShowTitle {
                 Image(systemName: "pencil.and.scribble").font(.system(size: 10))
-                    .foregroundStyle(color.ink.opacity(0.5))
+                    .foregroundStyle(paperColor.inkColor.opacity(0.5))
                     .padding(6).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             }
         }

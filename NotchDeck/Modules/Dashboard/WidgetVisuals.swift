@@ -305,22 +305,28 @@ struct QuickNoteWidget: View {
     @EnvironmentObject private var service: QuickNoteService
     @EnvironmentObject private var settings: SettingsStore
 
-    private var color: NoteColor { settings.settings.noteColor }
+    private var paperColor: NotePaperColor {
+        settings.settings.resolvedNotePaperColor
+    }
     private var paperStyle: PaperStyleIntensity { settings.settings.paperStyleIntensity }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack { Image(systemName: "pencil.and.scribble").font(.system(size: 10))
                 Text("Note").font(.system(size: 11, weight: .semibold)); Spacer() }
-                .foregroundStyle(color.ink.opacity(0.7))
+                .foregroundStyle(paperColor.inkColor.opacity(0.7))
             if size == .small {
                 Text(service.isEmpty ? "Tap to jot…" : service.firstLine)
                     .font(.system(size: 11, weight: .medium)).lineLimit(2)
-                    .foregroundStyle(service.isEmpty ? color.ink.opacity(0.45) : color.ink)
+                    .foregroundStyle(
+                        service.isEmpty
+                            ? paperColor.inkColor.opacity(0.45)
+                            : paperColor.inkColor
+                    )
             } else {
                 TextEditor(text: $service.text)
                     .font(.system(size: 12, weight: .medium)).scrollContentBackground(.hidden)
-                    .foregroundStyle(color.ink)
+                    .foregroundStyle(paperColor.inkColor)
             }
             Spacer(minLength: 0)
         }
@@ -329,14 +335,14 @@ struct QuickNoteWidget: View {
         .background {
             ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(LinearGradient(colors: [color.paper, color.paper.opacity(0.92)],
+                    .fill(LinearGradient(colors: [paperColor.color, paperColor.color.opacity(0.92)],
                                          startPoint: .top, endPoint: .bottom))
-                Rectangle().fill(color.ink.opacity(0.12)).frame(height: 1).padding(.top, 24)
+                Rectangle().fill(paperColor.inkColor.opacity(0.12)).frame(height: 1).padding(.top, 24)
                     .frame(maxHeight: .infinity, alignment: .top)
                 if paperStyle.showsFold {
                     Path { p in
                         p.move(to: CGPoint(x: 0, y: 0)); p.addLine(to: CGPoint(x: 14, y: 0)); p.addLine(to: CGPoint(x: 0, y: 14))
-                    }.fill(color.ink.opacity(0.10)).frame(width: 14, height: 14)
+                    }.fill(paperColor.inkColor.opacity(0.10)).frame(width: 14, height: 14)
                 }
             }
         }

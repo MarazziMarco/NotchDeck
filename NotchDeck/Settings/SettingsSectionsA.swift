@@ -44,8 +44,22 @@ struct AppearanceSettingsView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         SettingsGroup(title: "Quick Note (Home)") {
-            Picker("Note colour", selection: $settings.settings.noteColor) {
-                ForEach(NoteColor.allCases) { Text($0.label).tag($0) }
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Paper colour")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 9) {
+                    ForEach(NoteColor.allCases) { preset in
+                        noteColourSwatch(preset)
+                    }
+                }
+                ColorPicker(
+                    "Custom colour",
+                    selection: customNoteColour,
+                    supportsOpacity: false
+                )
+                .accessibilityLabel("Custom Quick Note colour")
+                .accessibilityHint("Choose any paper colour for Quick Note")
             }
             Picker("Paper style", selection: $settings.settings.paperStyleIntensity) {
                 ForEach(PaperStyleIntensity.allCases) { Text($0.label).tag($0) }
@@ -82,6 +96,48 @@ struct AppearanceSettingsView: View {
             Text("Animations are also reduced automatically when macOS “Reduce Motion” is on.")
                 .font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    private var customNoteColour: Binding<Color> {
+        Binding(
+            get: { settings.settings.resolvedNotePaperColor.color },
+            set: { newColour in
+                guard let persisted = NotePaperColor(color: newColour) else { return }
+                settings.settings.selectCustomNoteColor(persisted)
+            }
+        )
+    }
+
+    private func noteColourSwatch(_ preset: NoteColor) -> some View {
+        let selected = settings.settings.noteCustomColor == nil
+            && settings.settings.noteColor == preset
+        let ink = preset.paperComponents.inkColor
+        return Button {
+            settings.settings.selectNotePreset(preset)
+        } label: {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(preset.paper)
+                .frame(width: 28, height: 28)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(
+                            selected ? Color.accentColor : Color.white.opacity(0.16),
+                            lineWidth: selected ? 3 : 1
+                        )
+                }
+                .overlay {
+                    if selected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(ink)
+                    }
+                }
+                .shadow(color: .black.opacity(0.22), radius: 2, y: 1)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(preset.label) Quick Note colour")
+        .accessibilityValue(selected ? "Selected" : "Not selected")
+        .accessibilityHint("Use \(preset.label.lowercased()) paper")
     }
 }
 
