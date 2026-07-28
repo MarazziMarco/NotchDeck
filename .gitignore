@@ -36,6 +36,7 @@ ExportOptions.plist
 
 # ── Local tooling / editor ───────────────────────────────────────
 .claude/
+.worktrees/
 .vscode/
 .idea/
 *.local.json
