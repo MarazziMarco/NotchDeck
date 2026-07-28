@@ -106,6 +106,9 @@ struct AppSettings: Codable, Equatable {
     var showHomeDividers: Bool = true
     // Home Quick Note
     var noteColor: NoteColor = .yellow
+    /// `nil` keeps the selected preset active. A custom value overrides only
+    /// the paper colour and leaves the preset available for predictable restore.
+    var noteCustomColor: NotePaperColor? = nil
     var paperStyleIntensity: PaperStyleIntensity = .medium
     var noteFontSize: NoteFontSize = .standard
     var noteShowTitle: Bool = true
@@ -201,4 +204,17 @@ struct AppSettings: Codable, Equatable {
 
     // Diagnostics
     var interactionDiagnostics: Bool = false
+
+    var resolvedNotePaperColor: NotePaperColor {
+        noteCustomColor?.clamped ?? noteColor.paperComponents
+    }
+
+    mutating func selectNotePreset(_ preset: NoteColor) {
+        noteColor = preset
+        noteCustomColor = nil
+    }
+
+    mutating func selectCustomNoteColor(_ colour: NotePaperColor) {
+        noteCustomColor = colour.clamped
+    }
 }

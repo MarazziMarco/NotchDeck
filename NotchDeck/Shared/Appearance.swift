@@ -1,4 +1,85 @@
 import SwiftUI
+import AppKit
+
+/// Persistable sRGB paper colour shared by every Quick Note presentation.
+struct NotePaperColor: Codable, Equatable {
+    let red: Double
+    let green: Double
+    let blue: Double
+    let opacity: Double
+
+    init(red: Double, green: Double, blue: Double, opacity: Double = 1) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.opacity = opacity
+    }
+
+    init?(color: Color) {
+        guard let srgb = NSColor(color).usingColorSpace(.sRGB) else { return nil }
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var opacity: CGFloat = 0
+        srgb.getRed(&red, green: &green, blue: &blue, alpha: &opacity)
+        self.init(
+            red: Double(red),
+            green: Double(green),
+            blue: Double(blue),
+            opacity: Double(opacity)
+        )
+    }
+
+    var clamped: NotePaperColor {
+        NotePaperColor(
+            red: red.clamped(to: 0...1),
+            green: green.clamped(to: 0...1),
+            blue: blue.clamped(to: 0...1),
+            opacity: opacity.clamped(to: 0...1)
+        )
+    }
+
+    var color: Color {
+        let value = clamped
+        return Color(
+            .sRGB,
+            red: value.red,
+            green: value.green,
+            blue: value.blue,
+            opacity: value.opacity
+        )
+    }
+
+    /// Picks the ink with the better WCAG contrast against the paper.
+    var usesLightInk: Bool {
+        relativeLuminance < 0.179
+    }
+
+    var inkColor: Color {
+        usesLightInk
+            ? Color(red: 0.98, green: 0.98, blue: 0.96)
+            : Color(red: 0.12, green: 0.10, blue: 0.05)
+    }
+
+    private var relativeLuminance: Double {
+        let value = clamped
+        return 0.2126 * Self.linear(value.red)
+            + 0.7152 * Self.linear(value.green)
+            + 0.0722 * Self.linear(value.blue)
+    }
+
+    private static func linear(_ component: Double) -> Double {
+        component <= 0.04045
+            ? component / 12.92
+            : pow((component + 0.055) / 1.055, 2.4)
+    }
+}
+
+private extension Double {
+    func clamped(to range: ClosedRange<Double>) -> Double {
+        min(max(self, range.lowerBound), range.upperBound)
+    }
+}
 
 /// Panel background darkness. Accent color always comes from widgets, never the
 /// base. Default is Deep Black.
@@ -44,19 +125,26 @@ enum MirrorOrientation: String, Codable, CaseIterable, Identifiable {
 
 /// Post-it colours for the Home Quick Note.
 enum NoteColor: String, Codable, CaseIterable, Identifiable {
-    case yellow, pink, green, blue
+    case yellow, pink, green, blue, orange, purple
     var id: String { rawValue }
-    var label: String { rawValue.capitalized }
-    /// Warm, muted paper tone (kept premium, not neon).
-    var paper: Color {
+    var label: String {
         switch self {
-        case .yellow: return Color(red: 0.86, green: 0.78, blue: 0.42)
-        case .pink:   return Color(red: 0.82, green: 0.62, blue: 0.66)
-        case .green:  return Color(red: 0.62, green: 0.76, blue: 0.60)
-        case .blue:   return Color(red: 0.58, green: 0.70, blue: 0.82)
+        case .yellow: return "Classic Yellow"
+        default: return rawValue.capitalized
         }
     }
-    var ink: Color { Color(red: 0.12, green: 0.10, blue: 0.05) }
+    var paperComponents: NotePaperColor {
+        switch self {
+        case .yellow: return NotePaperColor(red: 1.00, green: 0.898, blue: 0.42)
+        case .pink:   return NotePaperColor(red: 1.00, green: 0.62, blue: 0.71)
+        case .green:  return NotePaperColor(red: 0.67, green: 0.90, blue: 0.56)
+        case .blue:   return NotePaperColor(red: 0.57, green: 0.79, blue: 1.00)
+        case .orange: return NotePaperColor(red: 1.00, green: 0.71, blue: 0.37)
+        case .purple: return NotePaperColor(red: 0.78, green: 0.64, blue: 1.00)
+        }
+    }
+    var paper: Color { paperComponents.color }
+    var ink: Color { paperComponents.inkColor }
 }
 
 /// Paper texture strength for the note.

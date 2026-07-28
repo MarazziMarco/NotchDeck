@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import NotchDeck
 
 @MainActor
@@ -81,6 +82,99 @@ final class NoteAndMirrorDefaultsTests: XCTestCase {
 
     func testNoteDefaultColorIsYellow() {
         XCTAssertEqual(AppSettings().noteColor, .yellow)
+    }
+
+    func testClassicYellowIsBrightPostItYellow() {
+        XCTAssertEqual(
+            NoteColor.yellow.paperComponents,
+            NotePaperColor(red: 1.0, green: 0.898, blue: 0.42)
+        )
+    }
+
+    func testQuickNotePaletteHasSixNamedPresets() {
+        XCTAssertEqual(
+            NoteColor.allCases.map(\.label),
+            ["Classic Yellow", "Pink", "Green", "Blue", "Orange", "Purple"]
+        )
+    }
+
+    func testCustomColourOverridesPresetAndRoundTrips() throws {
+        var settings = AppSettings()
+        let custom = NotePaperColor(red: 0.1, green: 0.2, blue: 0.3)
+
+        settings.selectCustomNoteColor(custom)
+        let decoded = try JSONDecoder().decode(
+            AppSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+
+        XCTAssertEqual(decoded.resolvedNotePaperColor, custom)
+        XCTAssertEqual(decoded.noteColor, .yellow)
+    }
+
+    func testSelectingPresetClearsCustomOverride() {
+        var settings = AppSettings()
+        settings.selectCustomNoteColor(
+            NotePaperColor(red: 0.1, green: 0.2, blue: 0.3)
+        )
+
+        settings.selectNotePreset(.pink)
+
+        XCTAssertNil(settings.noteCustomColor)
+        XCTAssertEqual(settings.noteColor, .pink)
+        XCTAssertEqual(
+            settings.resolvedNotePaperColor,
+            NoteColor.pink.paperComponents
+        )
+    }
+
+    func testCustomColourIsClampedBeforePersistence() {
+        var settings = AppSettings()
+
+        settings.selectCustomNoteColor(
+            NotePaperColor(red: 1.4, green: -0.2, blue: 0.5, opacity: 2)
+        )
+
+        XCTAssertEqual(
+            settings.noteCustomColor,
+            NotePaperColor(red: 1, green: 0, blue: 0.5, opacity: 1)
+        )
+    }
+
+    func testPaperLuminanceSelectsReadableInk() {
+        XCTAssertTrue(
+            NotePaperColor(red: 0.05, green: 0.05, blue: 0.05).usesLightInk
+        )
+        XCTAssertFalse(
+            NotePaperColor(red: 1.0, green: 0.9, blue: 0.4).usesLightInk
+        )
+    }
+
+    func testNativeCustomColourConvertsToPersistableSRGB() throws {
+        let converted = try XCTUnwrap(
+            NotePaperColor(color: Color(.sRGB, red: 0.2, green: 0.4, blue: 0.6))
+        )
+
+        XCTAssertEqual(converted.red, 0.2, accuracy: 0.001)
+        XCTAssertEqual(converted.green, 0.4, accuracy: 0.001)
+        XCTAssertEqual(converted.blue, 0.6, accuracy: 0.001)
+        XCTAssertEqual(converted.opacity, 1, accuracy: 0.001)
+    }
+
+    func testLegacySettingsWithoutCustomColourRemainDecodable() throws {
+        let encoded = try JSONEncoder().encode(AppSettings())
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        object.removeValue(forKey: "noteCustomColor")
+
+        let decoded = try JSONDecoder().decode(
+            AppSettings.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+
+        XCTAssertNil(decoded.noteCustomColor)
+        XCTAssertEqual(decoded.resolvedNotePaperColor, NoteColor.yellow.paperComponents)
     }
 
     func testMirrorDefaultCircular() {
