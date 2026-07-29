@@ -193,3 +193,41 @@ final class AgentSessionStore: ObservableObject, LiveActivitySource {
         store.save(sessions.filter { $0.isManaged })
     }
 }
+
+/// Presentation-only projection from the authoritative approval transactions
+/// already owned by `AgentSessionStore`. It never owns deadlines, decisions or
+/// provider identities; it only tells the notch state machine whether a Peek is
+/// currently available.
+@MainActor
+final class ApprovalPeekCoordinator: ObservableObject {
+    @Published private(set) var snapshot = ApprovalPeekQueueSnapshot(items: [])
+    @Published private(set) var isHovering = false
+
+    private weak var appState: AppState?
+    private var cancellables = Set<AnyCancellable>()
+
+    init(store: AgentSessionStore, appState: AppState, settings: SettingsStore) {
+        self.appState = appState
+
+        let enabled = settings.$settings
+            .map { AgentsModule.isEnabled($0) && $0.autoOpenOnApproval }
+            .removeDuplicates()
+
+        store.$sessions
+            .combineLatest(enabled)
+            .sink { [weak self] sessions, isEnabled in
+                guard let self else { return }
+                let next = ApprovalPeekQueue.resolve(sessions: sessions)
+                self.snapshot = next
+                self.appState?.handle(.approvalPeekAvailable(
+                    isEnabled && next.visible != nil
+                ))
+            }
+            .store(in: &cancellables)
+    }
+
+    func setHovering(_ hovering: Bool) {
+        guard hovering != isHovering else { return }
+        isHovering = hovering
+    }
+}

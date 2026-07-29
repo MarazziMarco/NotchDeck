@@ -586,6 +586,163 @@ struct PendingApproval: Equatable, Codable {
     }
 }
 
+/// One presentation-only reference to an approval transaction already owned by
+/// `AgentSessionStore`. It carries a value snapshot for rendering, but all
+/// actions must resolve `sessionID + transactionID` back against the store.
+struct ApprovalPeekItem: Equatable, Identifiable {
+    let sessionID: UUID
+    let sessionTitle: String
+    let projectPath: String
+    let approval: PendingApproval
+    let sessionQueueIndex: Int
+
+    var id: String { transactionID }
+    var transactionID: String { approval.requestID }
+
+    func isLocallyActionable(at now: Date) -> Bool {
+        approval.isActionable(now: now)
+    }
+
+    func statusText(at now: Date) -> String {
+        if approval.isActionable(now: now) { return "Waiting for decision" }
+        switch approval.state {
+        case .sending: return "Sending decision"
+        case .sent, .providerOutputClosed, .helperTerminated, .helperExited:
+            return "Decision sent"
+        case .deliveryFailed: return "Delivery failed — Respond in Terminal"
+        case .fellBack, .expired: return "Respond in Terminal"
+        case .pending: return "Respond in Terminal"
+        case .cancelled: return "Cancelled"
+        case .delivered, .answered: return "Resolved"
+        }
+    }
+}
+
+struct ApprovalPeekQueueSnapshot: Equatable {
+    var items: [ApprovalPeekItem]
+
+    var visible: ApprovalPeekItem? { items.first }
+    var visiblePosition: Int? { visible == nil ? nil : 1 }
+    var totalCount: Int { items.count }
+    var queueLabel: String? { totalCount > 1 ? "1/\(totalCount)" : nil }
+}
+
+/// Deterministic projection of the existing per-session approval queues. This
+/// never owns, mutates, or re-identifies a transaction.
+enum ApprovalPeekQueue {
+    static func resolve(sessions: [AgentSession]) -> ApprovalPeekQueueSnapshot {
+        let ordered = sessions.flatMap { session -> [ApprovalPeekItem] in
+            let approvals = [session.approval].compactMap { $0 } + (session.queuedApprovals ?? [])
+            return approvals.enumerated().compactMap { index, approval in
+                guard isPresentable(approval.state) else { return nil }
+                return ApprovalPeekItem(
+                    sessionID: session.id,
+                    sessionTitle: session.title,
+                    projectPath: session.projectPath,
+                    approval: approval,
+                    sessionQueueIndex: index
+                )
+            }
+        }
+        .sorted { lhs, rhs in
+            if lhs.approval.receivedAt != rhs.approval.receivedAt {
+                return lhs.approval.receivedAt < rhs.approval.receivedAt
+            }
+            let leftSession = lhs.sessionID.uuidString
+            let rightSession = rhs.sessionID.uuidString
+            if leftSession != rightSession { return leftSession < rightSession }
+            return lhs.sessionQueueIndex < rhs.sessionQueueIndex
+        }
+
+        var seen = Set<String>()
+        let unique = ordered.filter { seen.insert($0.transactionID).inserted }
+        return ApprovalPeekQueueSnapshot(items: unique)
+    }
+
+    private static func isPresentable(_ state: PendingApproval.ResponseState) -> Bool {
+        switch state {
+        case .pending, .sending, .sent, .providerOutputClosed, .helperTerminated,
+             .helperExited, .deliveryFailed, .fellBack, .expired:
+            return true
+        case .delivered, .cancelled, .answered:
+            return false
+        }
+    }
+}
+
+enum ApprovalPeekProgress {
+    static func fraction(receivedAt: Date, deadline: Date, now: Date) -> Double {
+        let duration = deadline.timeIntervalSince(receivedAt)
+        guard duration > 0 else { return now < deadline ? 1 : 0 }
+        return min(1, max(0, deadline.timeIntervalSince(now) / duration))
+    }
+}
+
+/// Shared visual and accessibility language for the collapsed approval strip.
+/// It is derived entirely from one projected authoritative transaction.
+struct ApprovalPeekPresentation: Equatable {
+    let providerName: String
+    let projectName: String
+    let toolName: String
+    let actionSummary: String
+    let queueText: String?
+    let groupAccessibilityLabel: String
+    let allowAccessibilityLabel: String
+    let denyAccessibilityLabel: String
+    let focusAccessibilityLabel: String
+    let expiredStatus = "Respond in Terminal"
+
+    init(item: ApprovalPeekItem, totalCount: Int) {
+        switch item.approval.provider {
+        case .claudeCode: providerName = "Claude"
+        case .codex: providerName = "Codex"
+        case .external: providerName = "Agent"
+        }
+        let pathName = URL(fileURLWithPath: item.projectPath).lastPathComponent
+        projectName = pathName.isEmpty ? item.sessionTitle : pathName
+        toolName = item.approval.toolName?.isEmpty == false
+            ? item.approval.toolName! : "Action"
+        actionSummary = item.approval.summary
+        queueText = totalCount > 1 ? "1/\(totalCount)" : nil
+        let position = totalCount > 1 ? ", request 1 of \(totalCount)" : ""
+        groupAccessibilityLabel =
+            "\(providerName) approval for \(projectName): \(toolName), \(actionSummary)\(position)"
+        allowAccessibilityLabel =
+            "Allow \(providerName) to perform \(actionSummary)"
+        denyAccessibilityLabel =
+            "Deny \(providerName) permission to perform \(actionSummary)"
+        focusAccessibilityLabel =
+            "Focus Terminal for \(providerName) session \(projectName)"
+    }
+
+    var isCommand: Bool {
+        let lower = toolName.lowercased()
+        return lower.contains("bash") || lower.contains("shell")
+            || lower.contains("command") || lower == "exec"
+    }
+}
+
+struct ApprovalPeekMotionPolicy: Equatable {
+    let animatesAppearance: Bool
+    let animatesHoverGrowth: Bool
+    let animatesProgress: Bool
+
+    init(reduceMotion: Bool) {
+        animatesAppearance = !reduceMotion
+        animatesHoverGrowth = !reduceMotion
+        animatesProgress = !reduceMotion
+    }
+}
+
+enum ApprovalPeekFocus {
+    static func target(
+        for item: ApprovalPeekItem,
+        sessions: [AgentSession]
+    ) -> AgentSession? {
+        sessions.first { $0.id == item.sessionID }
+    }
+}
+
 // MARK: - Latest message resolution & sanitisation
 
 enum AgentLatestMessage {

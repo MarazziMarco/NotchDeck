@@ -149,7 +149,7 @@ final class ApprovalLifetimeTests: XCTestCase {
         )
     }
 
-    func testQueuedExpiryIsIndependentAndNeverPromotesAStaleRequest() {
+    func testQueuedExpiryIsIndependentAndPreservesTerminalPendingRequest() {
         var session = TerminalAgentBridge.reduce(
             existing: nil,
             id: UUID(),
@@ -173,7 +173,330 @@ final class ApprovalLifetimeTests: XCTestCase {
         )
         XCTAssertEqual(released, ["B"])
         XCTAssertEqual(session.approval?.requestID, "A")
-        XCTAssertTrue(session.queuedApprovals?.isEmpty ?? true)
+        XCTAssertEqual(session.queuedApprovals?.map(\.requestID), ["B"])
+        XCTAssertEqual(session.queuedApprovals?.first?.state, .fellBack)
+        XCTAssertNil(session.queuedApprovals?.first?.decidedAllow)
+    }
+
+    func testVisibleExpiryDoesNotAdvanceOrDecideWhileTerminalIsPending() {
+        var session = TerminalAgentBridge.reduce(
+            existing: nil,
+            id: UUID(),
+            event: permEvent("A"),
+            handlingMode: .notchWithTerminalFallback,
+            approvalLifetime: 30,
+            now: t0
+        )
+        session = TerminalAgentBridge.reduce(
+            existing: session,
+            id: session.id,
+            event: permEvent("B"),
+            handlingMode: .notchWithTerminalFallback,
+            approvalLifetime: 300,
+            now: t0.addingTimeInterval(1)
+        )
+
+        let released = TerminalAgentBridge.expireTransactions(
+            &session,
+            now: t0.addingTimeInterval(31)
+        )
+
+        XCTAssertEqual(released, ["A"])
+        XCTAssertEqual(session.approval?.requestID, "A")
+        XCTAssertEqual(session.approval?.state, .fellBack)
         XCTAssertNil(session.approval?.decidedAllow)
+        XCTAssertEqual(session.queuedApprovals?.map(\.requestID), ["B"])
+    }
+
+    func testNewConcurrentRequestDoesNotReplaceExpiredTerminalPendingHead() {
+        var session = TerminalAgentBridge.reduce(
+            existing: nil,
+            id: UUID(),
+            event: permEvent("A"),
+            handlingMode: .notchWithTerminalFallback,
+            approvalLifetime: 30,
+            now: t0
+        )
+        _ = TerminalAgentBridge.expireTransactions(
+            &session,
+            now: t0.addingTimeInterval(31)
+        )
+
+        session = TerminalAgentBridge.reduce(
+            existing: session,
+            id: session.id,
+            event: permEvent("B"),
+            handlingMode: .notchWithTerminalFallback,
+            approvalLifetime: 300,
+            now: t0.addingTimeInterval(32)
+        )
+
+        XCTAssertEqual(session.approval?.requestID, "A")
+        XCTAssertEqual(session.approval?.state, .fellBack)
+        XCTAssertEqual(session.queuedApprovals?.map(\.requestID), ["B"])
+    }
+}
+
+final class ApprovalPeekQueueTests: XCTestCase {
+    private let t0 = Date(timeIntervalSince1970: 2_000_000)
+
+    private func approval(
+        _ requestID: String,
+        receivedOffset: TimeInterval,
+        state: PendingApproval.ResponseState = .pending
+    ) -> PendingApproval {
+        PendingApproval(
+            provider: .claudeCode,
+            sessionID: "provider-session",
+            requestID: requestID,
+            providerRequestID: "native-\(requestID)",
+            toolUseID: nil,
+            turnID: nil,
+            rawEventName: "PermissionRequest",
+            toolName: "Bash",
+            summary: "printf safe",
+            receivedAt: t0.addingTimeInterval(receivedOffset),
+            expiresAt: t0.addingTimeInterval(receivedOffset + 60),
+            state: state,
+            handlingMode: .notchWithTerminalFallback,
+            fallbackDeadline: t0.addingTimeInterval(receivedOffset + 60),
+            nativePromptExpected: true
+        )
+    }
+
+    private func session(
+        id: UUID,
+        current: PendingApproval?,
+        queued: [PendingApproval] = []
+    ) -> AgentSession {
+        var session = AgentSession(
+            id: id,
+            provider: .claudeCode,
+            providerSessionID: "provider-session",
+            title: "Claude project",
+            projectPath: "/tmp/project",
+            status: current == nil ? .running : .waitingForApproval,
+            isManaged: false,
+            isBridgeConnected: true,
+            pendingApprovalRequestID: current?.requestID,
+            approval: current
+        )
+        session.queuedApprovals = queued.isEmpty ? nil : queued
+        return session
+    }
+
+    func testOneRequestIsVisibleAtATime() {
+        let one = session(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            current: approval("A", receivedOffset: 0),
+            queued: [approval("B", receivedOffset: 1)]
+        )
+
+        let snapshot = ApprovalPeekQueue.resolve(sessions: [one])
+
+        XCTAssertEqual(snapshot.visible?.transactionID, "A")
+        XCTAssertEqual(snapshot.totalCount, 2)
+    }
+
+    func testConcurrentRequestsRemainGlobalFIFO() {
+        let laterSession = session(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            current: approval("C", receivedOffset: 2)
+        )
+        let earlierSession = session(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            current: approval("A", receivedOffset: 0),
+            queued: [approval("B", receivedOffset: 1)]
+        )
+
+        let snapshot = ApprovalPeekQueue.resolve(sessions: [laterSession, earlierSession])
+
+        XCTAssertEqual(snapshot.items.map(\.transactionID), ["A", "B", "C"])
+    }
+
+    func testQueuePositionAndCountDescribeVisibleRequest() {
+        let one = session(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            current: approval("A", receivedOffset: 0),
+            queued: [
+                approval("B", receivedOffset: 1),
+                approval("C", receivedOffset: 2),
+            ]
+        )
+
+        let snapshot = ApprovalPeekQueue.resolve(sessions: [one])
+
+        XCTAssertEqual(snapshot.visiblePosition, 1)
+        XCTAssertEqual(snapshot.totalCount, 3)
+        XCTAssertEqual(snapshot.queueLabel, "1/3")
+    }
+
+    func testDuplicateTransactionIDsDoNotDuplicatePeekItems() {
+        let first = session(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            current: approval("same-transaction", receivedOffset: 0)
+        )
+        let duplicate = session(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            current: approval("same-transaction", receivedOffset: 1)
+        )
+
+        let snapshot = ApprovalPeekQueue.resolve(sessions: [duplicate, first])
+
+        XCTAssertEqual(snapshot.items.map(\.transactionID), ["same-transaction"])
+    }
+
+    func testTerminalPendingTransactionRemainsVisible() {
+        let one = session(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            current: approval("expired-locally", receivedOffset: 0, state: .fellBack)
+        )
+
+        let snapshot = ApprovalPeekQueue.resolve(sessions: [one])
+
+        XCTAssertEqual(snapshot.visible?.transactionID, "expired-locally")
+        XCTAssertFalse(snapshot.visible?.isLocallyActionable(at: t0.addingTimeInterval(70)) ?? true)
+        XCTAssertEqual(snapshot.visible?.statusText(at: t0.addingTimeInterval(70)), "Respond in Terminal")
+    }
+
+    func testProgressUsesOriginalAbsoluteDeadline() {
+        let received = Date(timeIntervalSince1970: 100)
+        let deadline = Date(timeIntervalSince1970: 160)
+
+        XCTAssertEqual(
+            ApprovalPeekProgress.fraction(
+                receivedAt: received,
+                deadline: deadline,
+                now: Date(timeIntervalSince1970: 130)
+            ),
+            0.5,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            ApprovalPeekProgress.fraction(
+                receivedAt: received,
+                deadline: deadline,
+                now: Date(timeIntervalSince1970: 170)
+            ),
+            0,
+            accuracy: 0.0001
+        )
+    }
+
+    func testProgressDoesNotCreateOrChangeTransactionDeadline() {
+        let request = approval("deadline-stable", receivedOffset: 0)
+        let deadline = request.actionDeadline
+
+        _ = ApprovalPeekProgress.fraction(
+            receivedAt: request.receivedAt,
+            deadline: request.actionDeadline,
+            now: t0.addingTimeInterval(12)
+        )
+
+        XCTAssertEqual(request.actionDeadline, deadline)
+    }
+
+    func testCancelledAndDeliveredTransactionsAreNotPresentable() {
+        let cancelled = session(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            current: approval("cancelled", receivedOffset: 0, state: .cancelled)
+        )
+        let delivered = session(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            current: approval("delivered", receivedOffset: 1, state: .delivered)
+        )
+
+        let snapshot = ApprovalPeekQueue.resolve(sessions: [cancelled, delivered])
+
+        XCTAssertNil(snapshot.visible)
+        XCTAssertEqual(snapshot.totalCount, 0)
+    }
+
+    func testPeekAccessibilityExposesProviderActionQueueAndConsequences() throws {
+        let one = session(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            current: approval("A", receivedOffset: 0),
+            queued: [approval("B", receivedOffset: 1)]
+        )
+        let item = try XCTUnwrap(ApprovalPeekQueue.resolve(sessions: [one]).visible)
+        let presentation = ApprovalPeekPresentation(item: item, totalCount: 2)
+
+        XCTAssertTrue(presentation.groupAccessibilityLabel.contains("Claude"))
+        XCTAssertTrue(presentation.groupAccessibilityLabel.contains("printf safe"))
+        XCTAssertTrue(presentation.groupAccessibilityLabel.contains("1 of 2"))
+        XCTAssertTrue(presentation.allowAccessibilityLabel.contains("Allow"))
+        XCTAssertTrue(presentation.allowAccessibilityLabel.contains("Claude"))
+        XCTAssertTrue(presentation.denyAccessibilityLabel.contains("Deny"))
+        XCTAssertTrue(presentation.focusAccessibilityLabel.contains("Terminal"))
+    }
+
+    func testExpiredPeekWordingDoesNotClaimTerminalAppearsAfterTimeout() throws {
+        let one = session(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            current: approval("expired", receivedOffset: 0, state: .fellBack)
+        )
+        let item = try XCTUnwrap(ApprovalPeekQueue.resolve(sessions: [one]).visible)
+        let presentation = ApprovalPeekPresentation(item: item, totalCount: 1)
+
+        XCTAssertEqual(presentation.expiredStatus, "Respond in Terminal")
+        XCTAssertFalse(presentation.expiredStatus.localizedCaseInsensitiveContains("now"))
+        XCTAssertFalse(presentation.expiredStatus.localizedCaseInsensitiveContains("appears"))
+        XCTAssertFalse(presentation.expiredStatus.localizedCaseInsensitiveContains("after"))
+    }
+
+    func testPeekMotionPolicyDisablesNonessentialAnimationForReduceMotion() {
+        XCTAssertFalse(ApprovalPeekMotionPolicy(reduceMotion: true).animatesAppearance)
+        XCTAssertFalse(ApprovalPeekMotionPolicy(reduceMotion: true).animatesHoverGrowth)
+        XCTAssertFalse(ApprovalPeekMotionPolicy(reduceMotion: true).animatesProgress)
+        XCTAssertTrue(ApprovalPeekMotionPolicy(reduceMotion: false).animatesAppearance)
+    }
+
+    func testFocusTerminalTargetsTheVisibleRequestSession() throws {
+        let visibleID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let otherID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        let visibleSession = session(
+            id: visibleID,
+            current: approval("A", receivedOffset: 0)
+        )
+        let otherSession = session(
+            id: otherID,
+            current: approval("B", receivedOffset: 1)
+        )
+        let item = try XCTUnwrap(
+            ApprovalPeekQueue.resolve(sessions: [otherSession, visibleSession]).visible
+        )
+
+        let target = ApprovalPeekFocus.target(
+            for: item,
+            sessions: [otherSession, visibleSession]
+        )
+
+        XCTAssertEqual(target?.id, visibleID)
+        XCTAssertEqual(target?.approval?.requestID, "A")
+    }
+
+    func testSessionEndSafelyClearsCurrentAndQueuedPeekTransactions() {
+        let id = UUID()
+        var active = session(
+            id: id,
+            current: approval("A", receivedOffset: 0),
+            queued: [approval("B", receivedOffset: 1)]
+        )
+        active.providerSessionID = "provider-session"
+
+        let ended = TerminalAgentBridge.reduce(
+            existing: active,
+            id: id,
+            event: TerminalAgentEvent(
+                type: .sessionEnded,
+                provider: .claudeCode,
+                sessionID: "provider-session",
+                timestamp: t0.timeIntervalSince1970 + 2
+            )
+        )
+
+        XCTAssertNil(ended.approval)
+        XCTAssertNil(ended.queuedApprovals)
+        XCTAssertNil(ApprovalPeekQueue.resolve(sessions: [ended]).visible)
     }
 }

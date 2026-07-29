@@ -15,6 +15,7 @@ final class AppEnvironment: ObservableObject {
     let mirror: MirrorService
     let pomodoro: PomodoroService
     let agentStore: AgentSessionStore
+    let approvalPeek: ApprovalPeekCoordinator
     let agents: AgentCoordinator
     let permissions: PermissionCoordinator
     let registry: ModuleRegistry
@@ -44,7 +45,8 @@ final class AppEnvironment: ObservableObject {
     init(settings: SettingsStore = SettingsStore(),
          mediaProvider: NowPlayingProviding = AppleScriptNowPlayingProvider()) {
         self.settings = settings
-        self.appState = AppState(settings: settings)
+        let appState = AppState(settings: settings)
+        self.appState = appState
         self.clipboard = ClipboardService(maxItems: settings.settings.clipboardMaxItems)
         self.fileShelf = FileShelfStore()
         self.mirror = MirrorService()
@@ -55,6 +57,11 @@ final class AppEnvironment: ObservableObject {
             sessionsBeforeLongBreak: settings.settings.pomodoroSessionsBeforeLongBreak))
         let store = AgentSessionStore()
         self.agentStore = store
+        self.approvalPeek = ApprovalPeekCoordinator(
+            store: store,
+            appState: appState,
+            settings: settings
+        )
         self.agents = AgentCoordinator(store: store, settings: settings)
         self.permissions = PermissionCoordinator()
         self.pointerTracker = PointerTrackingService()
@@ -148,6 +155,7 @@ final class AppEnvironment: ObservableObject {
             .environmentObject(mirror)
             .environmentObject(pomodoro)
             .environmentObject(agentStore)
+            .environmentObject(approvalPeek)
             .environmentObject(agents)
             .environmentObject(permissions)
             .environmentObject(registry)

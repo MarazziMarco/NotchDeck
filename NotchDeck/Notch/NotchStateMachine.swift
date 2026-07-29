@@ -21,6 +21,7 @@ enum NotchFace: String, Equatable, Codable, CaseIterable {
 enum NotchEvent: Equatable {
     case hoverBegan
     case hoverEnded
+    case approvalPeekAvailable(Bool)
     case clicked
     case dragEntered
     case dragExited
@@ -38,6 +39,7 @@ struct NotchStateMachine: Equatable {
     private(set) var presentation: NotchPresentationState = .compact
     private(set) var face: NotchFace = .utilities
     private(set) var isLocked: Bool = false
+    private(set) var hasApprovalPeek: Bool = false
 
     /// Result of applying an event: whether anything changed, so callers can
     /// avoid re-animating identical states.
@@ -50,12 +52,20 @@ struct NotchStateMachine: Equatable {
             if locked { /* keep current presentation */ }
 
         case .hoverBegan:
-            guard !isLocked else { break }
-            if presentation == .compact { presentation = .peeking }
+            // Hover opens Expanded through `NotchInteractionCoordinator`.
+            // An empty approval Peek is never user-openable.
+            break
 
         case .hoverEnded:
-            // Hover leaving only retracts a peek; a click-opened panel stays.
-            if presentation == .peeking { presentation = .compact }
+            break
+
+        case .approvalPeekAvailable(let available):
+            hasApprovalPeek = available
+            if available, presentation == .compact {
+                presentation = .peeking
+            } else if !available, presentation == .peeking {
+                presentation = .compact
+            }
 
         case .clicked:
             guard !isLocked else { break }
@@ -71,7 +81,7 @@ struct NotchStateMachine: Equatable {
             break
 
         case .escapePressed, .outsideClicked, .requestCompact:
-            presentation = .compact
+            presentation = hasApprovalPeek ? .peeking : .compact
 
         case .requestExpand(let target):
             guard !isLocked else { break }

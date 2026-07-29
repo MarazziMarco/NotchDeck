@@ -3,13 +3,38 @@ import XCTest
 
 final class NotchStateMachineTests: XCTestCase {
 
-    func testHoverPeeksThenRetracts() {
+    func testHoverCannotOpenAnEmptyPeek() {
         var m = NotchStateMachine()
         XCTAssertEqual(m.presentation, .compact)
-        XCTAssertTrue(m.apply(.hoverBegan))
-        XCTAssertEqual(m.presentation, .peeking)
-        XCTAssertTrue(m.apply(.hoverEnded))
+        XCTAssertFalse(m.apply(.hoverBegan))
         XCTAssertEqual(m.presentation, .compact)
+    }
+
+    func testApprovalRequestTransitionsCompactToPeek() {
+        var m = NotchStateMachine()
+
+        XCTAssertTrue(m.apply(.approvalPeekAvailable(true)))
+
+        XCTAssertEqual(m.presentation, .peeking)
+    }
+
+    func testClearingFinalApprovalReturnsPeekToCompact() {
+        var m = NotchStateMachine()
+        m.apply(.approvalPeekAvailable(true))
+
+        XCTAssertTrue(m.apply(.approvalPeekAvailable(false)))
+
+        XCTAssertEqual(m.presentation, .compact)
+    }
+
+    func testCompactRequestKeepsPeekWhileApprovalRemains() {
+        var m = NotchStateMachine()
+        m.apply(.approvalPeekAvailable(true))
+        m.apply(.clicked)
+
+        XCTAssertTrue(m.apply(.requestCompact))
+
+        XCTAssertEqual(m.presentation, .peeking)
     }
 
     func testClickExpandsAndStaysOnHoverEnd() {
@@ -82,5 +107,97 @@ final class NotchStateMachineTests: XCTestCase {
         XCTAssertTrue(m.switchFace())
         XCTAssertEqual(m.face, .agents)
         XCTAssertFalse(m.switchFace(to: .agents))        // no change
+    }
+
+    @MainActor
+    func testApprovalStoreDrivesCompactToPeekWithoutOpeningAgents() {
+        let settings = SettingsStore.inMemory()
+        settings.settings.autoOpenOnApproval = true
+        let appState = AppState(settings: settings)
+        let store = AgentSessionStore(fileName: "peek-presentation-\(UUID()).json")
+        let coordinator = ApprovalPeekCoordinator(
+            store: store,
+            appState: appState,
+            settings: settings
+        )
+
+        store.upsert(Self.sessionWithApproval())
+
+        XCTAssertEqual(coordinator.snapshot.totalCount, 1)
+        XCTAssertEqual(appState.presentation, .peeking)
+        XCTAssertEqual(appState.face, .utilities)
+    }
+
+    @MainActor
+    func testAuthoritativeResolutionClearsPeekImmediately() {
+        let settings = SettingsStore.inMemory()
+        settings.settings.autoOpenOnApproval = true
+        let appState = AppState(settings: settings)
+        let store = AgentSessionStore(fileName: "peek-resolution-\(UUID()).json")
+        let coordinator = ApprovalPeekCoordinator(
+            store: store,
+            appState: appState,
+            settings: settings
+        )
+        let session = Self.sessionWithApproval()
+        store.upsert(session)
+
+        store.update(id: session.id) {
+            $0.approval = nil
+            $0.requiresAttention = false
+        }
+
+        XCTAssertNil(coordinator.snapshot.visible)
+        XCTAssertEqual(appState.presentation, .compact)
+    }
+
+    @MainActor
+    func testApprovalProjectionDoesNotReplaceExpandedState() {
+        let settings = SettingsStore.inMemory()
+        settings.settings.autoOpenOnApproval = true
+        let appState = AppState(settings: settings)
+        let store = AgentSessionStore(fileName: "peek-expanded-\(UUID()).json")
+        let coordinator = ApprovalPeekCoordinator(
+            store: store,
+            appState: appState,
+            settings: settings
+        )
+        appState.expand(face: .utilities)
+
+        store.upsert(Self.sessionWithApproval())
+
+        XCTAssertEqual(coordinator.snapshot.totalCount, 1)
+        XCTAssertEqual(appState.presentation, .expanded)
+        XCTAssertEqual(appState.face, .utilities)
+    }
+
+    private static func sessionWithApproval() -> AgentSession {
+        let now = Date()
+        return AgentSession(
+            provider: .claudeCode,
+            title: "Project",
+            projectPath: "/tmp/project",
+            status: .waitingForApproval,
+            requiresAttention: true,
+            isManaged: false,
+            isBridgeConnected: true,
+            pendingApprovalRequestID: "transaction",
+            approval: PendingApproval(
+                provider: .claudeCode,
+                sessionID: "provider-session",
+                requestID: "transaction",
+                toolUseID: "tool-use",
+                turnID: nil,
+                rawEventName: "PermissionRequest",
+                toolName: "Bash",
+                summary: "make test",
+                receivedAt: now,
+                expiresAt: now.addingTimeInterval(60),
+                state: .pending,
+                handlingMode: .notchWithTerminalFallback,
+                fallbackDeadline: now.addingTimeInterval(60),
+                nativePromptExpected: true
+            )
+        )
     }
 }

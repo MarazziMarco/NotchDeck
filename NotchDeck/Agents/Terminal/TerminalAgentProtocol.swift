@@ -229,6 +229,7 @@ public struct AgentPermissionRequest: Equatable {
     public let toolName: String?
     public let cwd: String?
     public let requestID: String
+    public let summary: String
 }
 
 public enum AgentPermissionAdapterError: Error, Equatable {
@@ -278,6 +279,166 @@ private enum PermissionPayload {
     }
 }
 
+/// A secret-safe display summary derived from the real permission tool input.
+/// The provider adapter remains the schema boundary; only this already-sanitized
+/// string crosses into the shared event/store model.
+public enum PermissionActionSummary {
+    public static let maxCharacters = 400
+
+    public static func resolve(toolName: String?, toolInput: Any?) -> String {
+        let tool = toolName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let input = toolInput as? [String: Any]
+
+        if let command = command(from: toolInput, dictionary: input) {
+            let sanitized = sanitize(command)
+            if !sanitized.isEmpty { return sanitized }
+        }
+
+        if let patch = input?["patch"] as? String,
+           let target = firstPatchTarget(in: patch) {
+            return sanitize("Apply patch to \(target)")
+        }
+
+        if let tool, tool.lowercased().hasPrefix("mcp__") {
+            let components = tool.split(separator: "__", omittingEmptySubsequences: true)
+            if components.count >= 3 {
+                let service = serviceName(String(components[1]))
+                let action = components.dropFirst(2).joined(separator: " ")
+                    .replacingOccurrences(of: "_", with: " ")
+                return sanitize("\(service) — \(action)")
+            }
+        }
+
+        if let target = firstString(in: input, keys: [
+            "file_path", "path", "target_file", "target", "directory", "root",
+        ]) {
+            return sanitize("\(tool ?? "Access") \(target)")
+        }
+
+        if let tool, !tool.isEmpty { return sanitize(tool) }
+        return "Approval request"
+    }
+
+    public static func sanitize(_ raw: String) -> String {
+        var text = replace(raw, pattern: "\u{1B}\\[[0-9;?]*[ -/]*[@-~]", with: "")
+        text = String(text.unicodeScalars.filter {
+            $0 == " " || $0 == "\n" || $0 == "\t" || $0.value >= 0x20
+        })
+        for pattern in [
+            #"(?i)authorization\s*[:=]\s*(bearer\s+)?\S+"#,
+            #"(?i)(api[_-]?key|apikey|token|secret|password|passwd|bearer|cookie)\s*[=:]\s*\S+"#,
+            #"sk-[A-Za-z0-9_-]{8,}"#,
+            #"sk-ant-[A-Za-z0-9_-]{8,}"#,
+            #"gh[pousr]_[A-Za-z0-9]{8,}"#,
+            #"AKIA[0-9A-Z]{12,}"#,
+            #"(?i)bearer\s+[A-Za-z0-9._-]{8,}"#,
+        ] {
+            text = replace(text, pattern: pattern, with: "«redacted»")
+        }
+        text = replace(text, pattern: #"\s+"#, with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.count > maxCharacters {
+            return String(text.prefix(maxCharacters - 1)) + "…"
+        }
+        return text
+    }
+
+    private static func command(
+        from raw: Any?,
+        dictionary: [String: Any]?
+    ) -> String? {
+        if let command = firstString(in: dictionary, keys: [
+            "command", "cmd", "shell_command", "script",
+        ]) {
+            return command
+        }
+        if let command = raw as? String { return command }
+        if let command = dictionary?["command"] as? [String] {
+            return command.joined(separator: " ")
+        }
+        if let command = dictionary?["cmd"] as? [String] {
+            return command.joined(separator: " ")
+        }
+        return nil
+    }
+
+    private static func firstString(
+        in dictionary: [String: Any]?,
+        keys: [String]
+    ) -> String? {
+        for key in keys {
+            if let value = dictionary?[key] as? String, !value.isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
+    private static func firstPatchTarget(in patch: String) -> String? {
+        let patterns = [
+            #"(?m)^\*\*\* (?:Update|Add|Delete) File:\s*(.+)$"#,
+            #"(?m)^\+\+\+\s+(?:b/)?(.+)$"#,
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(patch.startIndex..., in: patch)
+            guard let match = regex.firstMatch(in: patch, range: range),
+                  match.numberOfRanges > 1,
+                  let targetRange = Range(match.range(at: 1), in: patch) else { continue }
+            return String(patch[targetRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return nil
+    }
+
+    private static func serviceName(_ raw: String) -> String {
+        switch raw.lowercased() {
+        case "github": return "GitHub"
+        case "gitlab": return "GitLab"
+        default:
+            return raw.replacingOccurrences(of: "_", with: " ")
+                .localizedCapitalized
+        }
+    }
+
+    private static func replace(_ input: String, pattern: String, with replacement: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return input }
+        return regex.stringByReplacingMatches(
+            in: input,
+            range: NSRange(input.startIndex..., in: input),
+            withTemplate: replacement
+        )
+    }
+}
+
+/// Metadata-only shape logging for real provider payload inspection. Values are
+/// never included, so commands, paths, prompts and credentials cannot leak.
+public enum PermissionPayloadShape {
+    public static func describe(_ payload: [String: Any]) -> String {
+        payload.keys.sorted().map { key in
+            let value = payload[key]
+            if key == "tool_input", let nested = value as? [String: Any] {
+                let fields = nested.keys.sorted().map {
+                    "\($0):\(typeName(nested[$0]))"
+                }.joined(separator: ",")
+                return "\(key):object{\(fields)}"
+            }
+            return "\(key):\(typeName(value))"
+        }.joined(separator: ",")
+    }
+
+    private static func typeName(_ value: Any?) -> String {
+        switch value {
+        case is String: return "string"
+        case is Bool: return "bool"
+        case is NSNumber: return "number"
+        case is [String: Any]: return "object"
+        case is [Any]: return "array"
+        case nil, is NSNull: return "null"
+        default: return "other"
+        }
+    }
+}
+
 public struct ClaudePermissionAdapter: AgentPermissionProvider {
     public let provider: TerminalAgentProvider = .claudeCode
     public init() {}
@@ -299,7 +460,11 @@ public struct ClaudePermissionAdapter: AgentPermissionProvider {
             turnID: PermissionPayload.string(payload, "turn_id"),
             toolName: tool,
             cwd: PermissionPayload.string(payload, "cwd"),
-            requestID: requestID
+            requestID: requestID,
+            summary: PermissionActionSummary.resolve(
+                toolName: tool,
+                toolInput: payload["tool_input"]
+            )
         )
     }
 
@@ -346,7 +511,11 @@ public struct CodexPermissionAdapter: AgentPermissionProvider {
             turnID: turn,
             toolName: tool,
             cwd: PermissionPayload.string(payload, "cwd"),
-            requestID: requestID
+            requestID: requestID,
+            summary: PermissionActionSummary.resolve(
+                toolName: tool,
+                toolInput: payload["tool_input"]
+            )
         )
     }
 

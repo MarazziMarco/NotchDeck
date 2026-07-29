@@ -184,7 +184,6 @@ let payload = readStdin()
 let sessionID = string(payload, ["session_id", "sessionId", "thread_id", "threadId"]) ?? "unknown"
 let cwd = string(payload, ["cwd", "workingDirectory", "project_dir"]) ?? FileManager.default.currentDirectoryPath
 let toolName = string(payload, ["tool_name", "toolName", "tool"])
-let summary: String? = nil
 let toolUseID = string(payload, ["tool_use_id", "toolUseId"])
 let turnID = string(payload, ["turn_id", "turnId"])
 // Real hook event name from the CLI payload (for logging accuracy).
@@ -202,6 +201,12 @@ guard !isDecisionHook || parsedPermission != nil else {
     HookLog.line("permission parse failed → native fallback exit 0")
     exit(0)
 }
+if isDecisionHook {
+    HookLog.line(
+        "payload-shape provider=\(args.provider.cliName) \(PermissionPayloadShape.describe(payload))"
+    )
+}
+let summary = parsedPermission?.summary
 let requestID = parsedPermission?.requestID
     ?? toolUseID
     ?? string(payload, ["request_id", "requestId"])

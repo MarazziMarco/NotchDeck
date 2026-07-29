@@ -646,13 +646,18 @@ actor TerminalAgentBridge {
         // cleared below. Correlated by tool-use id (never by timestamp/name).
         let matchingProgress = event.type == .toolCompleted
             && s.approval.map { Self.providerProgressMatches($0, event: event) } == true
+        let matchingQueuedRequestID = event.type == .toolCompleted
+            ? (s.queuedApprovals ?? []).first {
+                Self.providerProgressMatches($0, event: event)
+            }?.requestID
+            : nil
         // After an explicit native fallback, a session-correlated PostToolUse
         // may lack the PermissionRequest's tool identity (notably in Claude).
         // It may clear one unambiguous fallback card, but never claims that a
         // NotchDeck decision was accepted and never touches a queued request.
         let resolvesUnambiguousFallback = event.type == .toolCompleted
             && s.approval?.state == .fellBack
-            && s.queuedApprovalCount == 0
+            && (s.queuedApprovals?.isEmpty ?? true)
         if matchingProgress, let ap = s.approval,
            ap.state == .sent || ap.state == .sending
             || ap.state == .providerOutputClosed || ap.state == .helperTerminated
@@ -675,6 +680,10 @@ actor TerminalAgentBridge {
             s.requiresAttention = false
         } else if matchingProgress || resolvesUnambiguousFallback {
             Self.finishCurrentTransaction(&s)
+        } else if let matchingQueuedRequestID {
+            var queued = s.queuedApprovals ?? []
+            queued.removeAll { $0.requestID == matchingQueuedRequestID }
+            s.queuedApprovals = queued.isEmpty ? nil : queued
         }
 
         switch event.type {
@@ -706,13 +715,18 @@ actor TerminalAgentBridge {
                 || (s.queuedApprovals ?? []).contains(where: { $0.requestID == requestID }) {
                 return s
             }
-            // A later PermissionRequest proves the provider is no longer blocked
-            // on a prior non-live transaction. Retire that terminal presentation
-            // before inserting the new request; otherwise it can sit forever
-            // behind `.helperExited`, which the timeout sweep intentionally
-            // ignores because it no longer owns a live decision.
-            if let current = s.approval, !current.isLive {
-                Self.finishCurrentTransaction(&s)
+            // Retire only transactions whose provider/helper lifecycle already
+            // ended. Local expiry/fallback/delivery failure remains the same
+            // terminal-pending transaction and must not be displaced merely
+            // because another concurrent request arrives.
+            if let current = s.approval {
+                switch current.state {
+                case .sent, .providerOutputClosed, .helperTerminated,
+                     .helperExited, .delivered, .answered, .cancelled:
+                    Self.finishCurrentTransaction(&s)
+                case .pending, .sending, .deliveryFailed, .fellBack, .expired:
+                    break
+                }
             }
             let summary = AgentLatestMessage.sanitize(event.summary
                 ?? event.toolName.map { "\($0) — permission requested" } ?? "Permission requested")
@@ -857,19 +871,17 @@ actor TerminalAgentBridge {
     private static func releaseTransaction(_ s: inout AgentSession, requestID: String,
                                            state: PendingApproval.ResponseState) {
         if s.approval?.requestID == requestID {
-            if s.queuedApprovalCount > 0 {
-                finishCurrentTransaction(&s)
-            } else {
-                s.approval?.state = state
-                s.pendingApprovalRequestID = nil
-                s.requiresAttention = false
-                s.latestSummary = "Respond in Terminal"
-                if s.status == .waitingForApproval { s.status = .running }
-            }
+            s.approval?.state = state
+            s.pendingApprovalRequestID = nil
+            s.requiresAttention = false
+            s.latestSummary = "Respond in Terminal"
+            if s.status == .waitingForApproval { s.status = .running }
             return
         }
         var queued = s.queuedApprovals ?? []
-        queued.removeAll { $0.requestID == requestID }
+        if let index = queued.firstIndex(where: { $0.requestID == requestID }) {
+            queued[index].state = state
+        }
         s.queuedApprovals = queued.isEmpty ? nil : queued
     }
 
@@ -1016,14 +1028,16 @@ actor TerminalAgentBridge {
     static func expireTransactions(_ session: inout AgentSession, now: Date) -> [String] {
         var released: [String] = []
         if var queued = session.queuedApprovals {
-            let stale = queued.filter { $0.isLive && !$0.isActionable(now: now) }
-            released.append(contentsOf: stale.map(\.requestID))
-            queued.removeAll { approval in stale.contains { $0.requestID == approval.requestID } }
+            for index in queued.indices
+            where queued[index].isLive && !queued[index].isActionable(now: now) {
+                released.append(queued[index].requestID)
+                queued[index].state = queued[index].nativePromptExpected ? .fellBack : .expired
+            }
             session.queuedApprovals = queued.isEmpty ? nil : queued
         }
-        while let approval = session.approval,
-              approval.isLive,
-              !approval.isActionable(now: now) {
+        if let approval = session.approval,
+           approval.isLive,
+           !approval.isActionable(now: now) {
             released.append(approval.requestID)
             releaseTransaction(
                 &session,

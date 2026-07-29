@@ -242,58 +242,94 @@ final class AgentCoordinator: ObservableObject {
     /// helper exit, and provider progression remain distinct truthful states.
     /// A decision after fallback/expiry is rejected.
     func decide(session: AgentSession, allow: Bool) async {
-        // Reject stale-card, duplicate and deadline-racing clicks atomically at
-        // the coordinator boundary. Never rewrite an in-flight transaction.
         guard let current = store.session(id: session.id),
               let presented = session.approval,
               let approval = current.approval,
               approval.requestID == presented.requestID,
-              approval.isActionable(now: Date()) else {
-            return
-        }
-        guard current.isBridgeConnected, let rid = current.pendingApprovalRequestID else {
-            // Managed (non-bridge) path keeps the simple flow.
+              approval.isActionable(now: Date()) else { return }
+        guard current.isBridgeConnected else {
+            // Preserve the existing managed-provider path used by Expanded
+            // Agents; Peek's exact socket transaction path is bridge-only.
             approvalInFlight.insert(session.id)
-            await decideApproval(session: session, allow: allow)
+            await decideApproval(session: current, allow: allow)
             approvalInFlight.remove(session.id)
             return
         }
+        _ = await decide(
+            sessionID: session.id,
+            transactionID: approval.requestID,
+            allow: allow
+        )
+    }
 
-        approvalInFlight.insert(session.id)
+    /// Transaction-specific decision boundary shared by Peek and Expanded Agents.
+    /// The immutable identity is resolved against the current store immediately
+    /// before state mutation, so stale snapshots and duplicate clicks are no-ops.
+    @discardableResult
+    func decide(
+        sessionID: UUID,
+        transactionID: String,
+        allow: Bool,
+        now: Date = Date()
+    ) async -> Bool {
+        guard let current = store.session(id: sessionID),
+              let approval = current.approval,
+              approval.requestID == transactionID,
+              approval.isActionable(now: now),
+              current.isBridgeConnected,
+              current.pendingApprovalRequestID == transactionID else {
+            return false
+        }
+
+        approvalInFlight.insert(sessionID)
         // DELIVERING: record the decision and disable further interaction, but do
         // NOT show a success state yet. "Approved" is applied ONLY when the helper
         // acknowledges emitting the provider response (bridge → .decisionDelivered).
-        store.update(id: session.id) {
+        store.update(id: sessionID) {
+            guard $0.approval?.requestID == transactionID else { return }
             $0.approval?.state = .sending
             $0.approval?.decidedAllow = allow
         }
-        AgentApprovalDiagnostics.record(session: session, requestID: rid,
+        AgentApprovalDiagnostics.record(session: current, requestID: transactionID,
                                         transition: "userDecided\(allow ? "Allow" : "Deny") → delivering")
 
         let delivered = await terminalBridge?.respond(
-            requestID: rid, allow: allow, message: allow ? nil : "Denied in NotchDeck") ?? false
-        approvalInFlight.remove(session.id)
+            requestID: transactionID,
+            allow: allow,
+            message: allow ? nil : "Denied in NotchDeck"
+        ) ?? false
+        approvalInFlight.remove(sessionID)
 
         if !delivered {
             // The helper was already gone (timed out / disconnected) → not delivered.
             // Do NOT auto-approve or fake success: show a truthful delivery failure.
-            store.update(id: session.id) { $0.approval?.state = .deliveryFailed }
-            AgentApprovalDiagnostics.record(session: session, requestID: rid,
+            store.update(id: sessionID) {
+                guard $0.approval?.requestID == transactionID,
+                      $0.approval?.state == .sending else { return }
+                $0.approval?.state = .deliveryFailed
+            }
+            AgentApprovalDiagnostics.record(session: current, requestID: transactionID,
                                             transition: "delivering → deliveryFailed (helper gone)")
-            return
+            return false
         }
         // Written to the live helper; still awaiting the emit-ack. If no ack lands
         // shortly, mark deliveryFailed (never a false "Approved").
-        let id = session.id
+        let id = sessionID
+        let requestID = transactionID
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 3 * 1_000_000_000)
             guard let self else { return }
-            if self.store.session(id: id)?.approval?.state == .sending {
-                self.store.update(id: id) { $0.approval?.state = .deliveryFailed }
-                AgentApprovalDiagnostics.record(sessionID: id, requestID: rid,
+            let live = self.store.session(id: id)?.approval
+            if live?.requestID == requestID, live?.state == .sending {
+                self.store.update(id: id) {
+                    guard $0.approval?.requestID == requestID else { return }
+                    $0.approval?.state = .deliveryFailed
+                }
+                AgentApprovalDiagnostics.record(sessionID: id, requestID: requestID,
                                                 transition: "delivering → deliveryFailed (no ack)")
             }
         }
+        return true
     }
 
     /// Resume a managed session (provider-supported) as a fresh event stream.

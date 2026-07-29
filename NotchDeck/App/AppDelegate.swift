@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import Combine
 
 /// Sets up the notch panel, interaction monitors and app-wide services. Keeps
 /// the app out of the Dock (accessory activation policy) while the menu bar item
@@ -9,8 +8,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panelController: NotchPanelController?
     private var interaction: NotchInteractionCoordinator?
     private var hotkeys: GlobalHotkeyMonitor?
-    private var cancellables = Set<AnyCancellable>()
-    private var knownApprovalIDs = Set<UUID>()
 
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -60,23 +57,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await environment.permissions.refresh()
             await environment.agents.refreshAvailability()
         }
-
-        // Auto-open the notch (without stealing focus) when a session newly needs
-        // approval, if enabled. App-wide so it works even while collapsed.
-        environment.agentStore.$sessions
-            .receive(on: RunLoop.main)
-            .sink { [weak self, weak environment] sessions in
-                guard let self, let environment,
-                      environment.settings.agentsEnabled,
-                      environment.settings.settings.autoOpenOnApproval else { return }
-                let approvals = Set(sessions.filter { $0.status == .waitingForApproval }.map(\.id))
-                let fresh = approvals.subtracting(self.knownApprovalIDs)
-                self.knownApprovalIDs = approvals
-                if !fresh.isEmpty, !environment.appState.isExpanded {
-                    environment.appState.expand(face: .agents)
-                }
-            }
-            .store(in: &cancellables)
 
         if !environment.settings.settings.onboardingCompleted {
             OnboardingWindowPresenter.shared.show(environment: environment)
