@@ -4,8 +4,15 @@ import Combine
 
 /// Defensive view-level pass-through in addition to the window-level mouse
 /// routing. Transparent host pixels never become AppKit hit targets.
-private final class PassthroughHostingView: NSHostingView<AnyView> {
+final class PassthroughHostingView: NSHostingView<AnyView> {
     var capturesPoint: ((CGPoint) -> Bool)?
+
+    /// A nonactivating panel never becomes key on a Peek button click. Accept
+    /// that first click explicitly so SwiftUI controls still receive it while
+    /// Terminal or the editor remains frontmost.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard capturesPoint?(point) ?? true else { return nil }
@@ -101,11 +108,18 @@ final class NotchPanelController {
             }
             .store(in: &cancellables)
 
+        environment.approvalPeek.$isSuppressed
+            .removeDuplicates()
+            .sink { [weak self] _ in self?.reposition(animated: true) }
+            .store(in: &cancellables)
+
         tracker.$snapshot
             .map(\.insideInteractiveSurface)
             .removeDuplicates()
-            .receive(on: RunLoop.main)
             .sink { [weak self] inside in
+                // PointerTrackingService is MainActor-isolated. Apply routing in
+                // the same publication turn; scheduling another run-loop hop can
+                // discard a quick first click after pointer entry.
                 self?.panel.ignoresMouseEvents = !inside
             }
             .store(in: &cancellables)
@@ -204,7 +218,7 @@ final class NotchPanelController {
     /// Extra compact-strip width for live activities. Two wings need more room
     /// than one; nothing active stays notch-tight.
     private func compactExtraWidth() -> CGFloat {
-        let l = environment.liveActivity.layout
+        let l = effectiveCompactLayout
         if let agent = l.compactAgentIndicator {
             return CompactAgentIndicatorGeometry.extraWidth(for: agent)
         }
@@ -215,6 +229,13 @@ final class NotchPanelController {
         if l.leading != nil && l.trailing != nil { return 210 }
         if l.leading != nil || l.trailing != nil { return 100 }
         return 0
+    }
+
+    private var effectiveCompactLayout: LiveActivityLayout {
+        ApprovalPeekCompactPolicy.effectiveLayout(
+            environment.liveActivity.layout,
+            isSuppressed: environment.approvalPeek.isSuppressed
+        )
     }
 
     func reposition(animated: Bool) {
@@ -240,7 +261,7 @@ final class NotchPanelController {
         // Closed & completely idle (no visible compact content) → collapse to the
         // physical notch. Any live activity → the compact capsule. The compact
         // FOCUS timer uses a shorter, content-driven asymmetric capsule.
-        let live = environment.liveActivity.layout
+        let live = effectiveCompactLayout
         let compactActivity = !live.isEmpty
         let isFocus = live.isFocusTimer && metrics.hasNotch
         let isAgent = live.compactAgentIndicator != nil && metrics.hasNotch
@@ -341,7 +362,7 @@ final class NotchPanelController {
     private func updateHotZones(metrics: DisplayMetrics, layout: NotchLayout,
                                 state: NotchPresentationState) {
         let focus = isCompactFocus(metrics)
-        let live = environment.liveActivity.layout
+        let live = effectiveCompactLayout
         let agent = live.compactAgentIndicator != nil && metrics.hasNotch
         let leftAgentWing = live.leading?.providerVendor == .claudeCode
             ? CompactAgentIndicatorGeometry.wingWidth : 0
@@ -386,15 +407,15 @@ final class NotchPanelController {
     /// The compact Focus timer (progress ring + emphasized MM:SS) on a notched
     /// display uses the dedicated content-driven capsule.
     private func isCompactFocus(_ metrics: DisplayMetrics) -> Bool {
-        metrics.hasNotch && environment.liveActivity.layout.isFocusTimer
+        metrics.hasNotch && effectiveCompactLayout.isFocusTimer
             && !environment.appState.isExpanded
     }
 
     private func updateCompactLayoutInfo(metrics: DisplayMetrics) {
         let info = environment.notchLayout
-        let idle = environment.liveActivity.layout.isEmpty && !environment.appState.isExpanded
+        let live = effectiveCompactLayout
+        let idle = live.isEmpty && !environment.appState.isExpanded
         let focus = isCompactFocus(metrics)
-        let live = environment.liveActivity.layout
         let agent = live.compactAgentIndicator != nil && metrics.hasNotch
         let agentLeft = live.leading?.providerVendor == .claudeCode
             ? CompactAgentIndicatorGeometry.wingWidth : 0
@@ -445,7 +466,7 @@ final class NotchPanelController {
             layoutClass: r.layoutClass)
 
         // Compact live-activity (Pomodoro countdown) diagnostics.
-        let live = environment.liveActivity.layout
+        let live = effectiveCompactLayout
         let compactW = NotchGeometryService.compactWidth(for: metrics) + compactExtraWidth()
         let compactH = NotchGeometryService.compactHeight(for: metrics)
         let housingW: CGFloat = metrics.hasNotch ? metrics.notchWidth : 0

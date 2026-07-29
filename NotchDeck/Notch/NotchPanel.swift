@@ -28,6 +28,9 @@ final class NotchPanel: NSPanel {
         isMovableByWindowBackground = false
         hidesOnDeactivate = false
         becomesKeyOnlyIfNeeded = true
+        // Mouse movement must keep flowing through the nonactivating panel so
+        // its visible controls become interactive before the first click.
+        acceptsMouseMovedEvents = true
 
         // Visible across every Space and over full-screen apps where allowed.
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]

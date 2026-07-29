@@ -171,6 +171,117 @@ final class NotchStateMachineTests: XCTestCase {
         XCTAssertEqual(appState.face, .utilities)
     }
 
+    @MainActor
+    func testDismissingPeekCompactsWithoutResolvingApproval() {
+        let settings = SettingsStore.inMemory()
+        settings.settings.autoOpenOnApproval = true
+        let appState = AppState(settings: settings)
+        let store = AgentSessionStore(fileName: "peek-dismiss-\(UUID()).json")
+        let coordinator = ApprovalPeekCoordinator(
+            store: store,
+            appState: appState,
+            settings: settings
+        )
+        let session = Self.sessionWithApproval()
+        let originalDeadline = session.approval?.actionDeadline
+        store.upsert(session)
+
+        coordinator.dismissCurrentPeek()
+
+        XCTAssertTrue(coordinator.isSuppressed)
+        XCTAssertEqual(appState.presentation, .compact)
+        XCTAssertEqual(store.session(id: session.id)?.approval?.requestID, "transaction")
+        XCTAssertEqual(store.session(id: session.id)?.approval?.actionDeadline, originalDeadline)
+        XCTAssertNil(store.session(id: session.id)?.approval?.decidedAllow)
+    }
+
+    @MainActor
+    func testDismissedPeekStaysCompactForUpdatesToSameTransactions() {
+        let settings = SettingsStore.inMemory()
+        settings.settings.autoOpenOnApproval = true
+        let appState = AppState(settings: settings)
+        let store = AgentSessionStore(fileName: "peek-dismiss-update-\(UUID()).json")
+        let coordinator = ApprovalPeekCoordinator(
+            store: store,
+            appState: appState,
+            settings: settings
+        )
+        let session = Self.sessionWithApproval()
+        store.upsert(session)
+        coordinator.dismissCurrentPeek()
+
+        store.update(id: session.id) {
+            $0.latestSummary = "still pending"
+        }
+
+        XCTAssertTrue(coordinator.isSuppressed)
+        XCTAssertEqual(appState.presentation, .compact)
+        XCTAssertEqual(coordinator.snapshot.visible?.transactionID, "transaction")
+    }
+
+    @MainActor
+    func testNewTransactionReopensDismissedPeek() {
+        let settings = SettingsStore.inMemory()
+        settings.settings.autoOpenOnApproval = true
+        let appState = AppState(settings: settings)
+        let store = AgentSessionStore(fileName: "peek-dismiss-new-\(UUID()).json")
+        let coordinator = ApprovalPeekCoordinator(
+            store: store,
+            appState: appState,
+            settings: settings
+        )
+        let first = Self.sessionWithApproval()
+        store.upsert(first)
+        coordinator.dismissCurrentPeek()
+
+        let template = Self.sessionWithApproval()
+        var second = AgentSession(
+            id: UUID(),
+            provider: template.provider,
+            title: template.title,
+            projectPath: template.projectPath,
+            status: template.status,
+            requiresAttention: template.requiresAttention,
+            isManaged: template.isManaged,
+            isBridgeConnected: template.isBridgeConnected,
+            pendingApprovalRequestID: "transaction-2",
+            approval: template.approval
+        )
+        second.pendingApprovalRequestID = "transaction-2"
+        second.approval?.requestID = "transaction-2"
+        second.approval?.receivedAt = Date().addingTimeInterval(1)
+        let secondDeadline = Date().addingTimeInterval(61)
+        second.approval?.expiresAt = secondDeadline
+        second.approval?.fallbackDeadline = secondDeadline
+        store.upsert(second)
+
+        XCTAssertFalse(coordinator.isSuppressed)
+        XCTAssertEqual(appState.presentation, .peeking)
+        XCTAssertEqual(coordinator.snapshot.totalCount, 2)
+    }
+
+    @MainActor
+    func testExpandPeekOpensFullAgentsWithoutResolvingApproval() {
+        let settings = SettingsStore.inMemory()
+        settings.settings.autoOpenOnApproval = true
+        let appState = AppState(settings: settings)
+        let store = AgentSessionStore(fileName: "peek-expand-\(UUID()).json")
+        let coordinator = ApprovalPeekCoordinator(
+            store: store,
+            appState: appState,
+            settings: settings
+        )
+        let session = Self.sessionWithApproval()
+        store.upsert(session)
+
+        coordinator.openExpanded()
+
+        XCTAssertEqual(appState.presentation, .expanded)
+        XCTAssertEqual(appState.face, .agents)
+        XCTAssertEqual(store.session(id: session.id)?.approval?.requestID, "transaction")
+        XCTAssertNil(store.session(id: session.id)?.approval?.decidedAllow)
+    }
+
     private static func sessionWithApproval() -> AgentSession {
         let now = Date()
         return AgentSession(

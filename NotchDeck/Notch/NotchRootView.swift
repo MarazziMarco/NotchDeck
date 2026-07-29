@@ -111,6 +111,8 @@ struct ApprovalPeekView: View {
         let motion = ApprovalPeekMotionPolicy(reduceMotion: appState.reduceMotion)
         return VStack(spacing: 0) {
             HStack(spacing: 11) {
+                peekWindowControls(presentation: presentation)
+
                 AgentProviderLogo(
                     appearance: AgentProviderAppearanceRegistry.appearance(
                         kind: item.approval.provider,
@@ -192,6 +194,46 @@ struct ApprovalPeekView: View {
             motion.animatesHoverGrowth ? .easeOut(duration: 0.18) : nil,
             value: peek.isHovering
         )
+    }
+
+    private func peekWindowControls(
+        presentation: ApprovalPeekPresentation
+    ) -> some View {
+        HStack(spacing: 5) {
+            peekIconButton(
+                symbol: "chevron.up",
+                accessibilityLabel: presentation.expandAccessibilityLabel,
+                help: "Open full approval details"
+            ) {
+                peek.openExpanded()
+            }
+            peekIconButton(
+                symbol: "xmark",
+                accessibilityLabel: presentation.dismissAccessibilityLabel,
+                help: "Hide this strip; keep responding in Terminal"
+            ) {
+                peek.dismissCurrentPeek()
+            }
+        }
+        .fixedSize()
+    }
+
+    private func peekIconButton(
+        symbol: String,
+        accessibilityLabel: String,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .bold))
+                .frame(width: 22, height: 22)
+                .background(Color.white.opacity(0.10), in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+        .help(help)
     }
 
     @ViewBuilder

@@ -202,9 +202,15 @@ final class AgentSessionStore: ObservableObject, LiveActivitySource {
 final class ApprovalPeekCoordinator: ObservableObject {
     @Published private(set) var snapshot = ApprovalPeekQueueSnapshot(items: [])
     @Published private(set) var isHovering = false
+    /// Presentation-only suppression requested by the strip's close control.
+    /// The authoritative transactions, deadlines and Terminal surface remain
+    /// untouched.
+    @Published private(set) var isSuppressed = false
 
     private weak var appState: AppState?
     private var cancellables = Set<AnyCancellable>()
+    private var suppressedTransactionIDs = Set<String>()
+    private var isAutoPresentationEnabled = true
 
     init(store: AgentSessionStore, appState: AppState, settings: SettingsStore) {
         self.appState = appState
@@ -218,9 +224,11 @@ final class ApprovalPeekCoordinator: ObservableObject {
             .sink { [weak self] sessions, isEnabled in
                 guard let self else { return }
                 let next = ApprovalPeekQueue.resolve(sessions: sessions)
+                self.isAutoPresentationEnabled = isEnabled
                 self.snapshot = next
+                self.reconcileSuppression(with: next)
                 self.appState?.handle(.approvalPeekAvailable(
-                    isEnabled && next.visible != nil
+                    isEnabled && next.visible != nil && !self.isSuppressed
                 ))
             }
             .store(in: &cancellables)
@@ -229,5 +237,41 @@ final class ApprovalPeekCoordinator: ObservableObject {
     func setHovering(_ hovering: Bool) {
         guard hovering != isHovering else { return }
         isHovering = hovering
+    }
+
+    /// Hide the current strip completely without deciding, cancelling or
+    /// changing the deadline of any approval. Existing transactions stay
+    /// suppressed as a set; the arrival of a genuinely new transaction reopens
+    /// Peek automatically.
+    func dismissCurrentPeek() {
+        guard snapshot.visible != nil else { return }
+        suppressedTransactionIDs = Set(snapshot.items.map(\.transactionID))
+        isSuppressed = true
+        setHovering(false)
+        appState?.handle(.approvalPeekAvailable(false))
+    }
+
+    /// Explicitly open the normal full-size Agents surface. This is the only
+    /// Peek control allowed to request an activating/expanded presentation.
+    func openExpanded() {
+        isSuppressed = false
+        suppressedTransactionIDs.removeAll()
+        appState?.handle(.approvalPeekAvailable(
+            isAutoPresentationEnabled && snapshot.visible != nil
+        ))
+        appState?.expand(face: .agents)
+    }
+
+    private func reconcileSuppression(with next: ApprovalPeekQueueSnapshot) {
+        let currentIDs = Set(next.items.map(\.transactionID))
+        if currentIDs.isEmpty {
+            suppressedTransactionIDs.removeAll()
+            isSuppressed = false
+        } else if isSuppressed && !currentIDs.isSubset(of: suppressedTransactionIDs) {
+            // Only a newly correlated transaction may reopen a user-dismissed
+            // strip. Mutations to the existing request(s) never do.
+            suppressedTransactionIDs.removeAll()
+            isSuppressed = false
+        }
     }
 }

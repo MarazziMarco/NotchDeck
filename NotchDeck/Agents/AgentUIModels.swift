@@ -690,6 +690,8 @@ struct ApprovalPeekPresentation: Equatable {
     let allowAccessibilityLabel: String
     let denyAccessibilityLabel: String
     let focusAccessibilityLabel: String
+    let dismissAccessibilityLabel: String
+    let expandAccessibilityLabel: String
     let expiredStatus = "Respond in Terminal"
 
     init(item: ApprovalPeekItem, totalCount: Int) {
@@ -713,6 +715,10 @@ struct ApprovalPeekPresentation: Equatable {
             "Deny \(providerName) permission to perform \(actionSummary)"
         focusAccessibilityLabel =
             "Focus Terminal for \(providerName) session \(projectName)"
+        dismissAccessibilityLabel =
+            "Hide \(providerName) approval strip; keep the request pending in Terminal"
+        expandAccessibilityLabel =
+            "Open full \(providerName) approval details"
     }
 
     var isCommand: Bool {
@@ -731,6 +737,18 @@ struct ApprovalPeekMotionPolicy: Equatable {
         animatesAppearance = !reduceMotion
         animatesHoverGrowth = !reduceMotion
         animatesProgress = !reduceMotion
+    }
+}
+
+/// A dismissed Peek must become the true physical-notch footprint even while
+/// other live activities remain in their authoritative coordinator. This is a
+/// rendering projection only; it never mutates or duplicates live activity.
+enum ApprovalPeekCompactPolicy {
+    static func effectiveLayout(
+        _ layout: LiveActivityLayout,
+        isSuppressed: Bool
+    ) -> LiveActivityLayout {
+        isSuppressed ? .empty : layout
     }
 }
 

@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import NotchDeck
 
 final class NotchGeometryServiceTests: XCTestCase {
@@ -106,6 +107,19 @@ final class NotchGeometryServiceTests: XCTestCase {
 
 @MainActor
 final class PeekPanelContractTests: XCTestCase {
+    func testNonactivatingHostAcceptsFirstMouseForPeekButtons() {
+        let host = PassthroughHostingView(rootView: AnyView(EmptyView()))
+
+        XCTAssertTrue(host.acceptsFirstMouse(for: nil))
+    }
+
+    func testPanelReceivesMouseMovementWithoutBecomingKey() {
+        let panel = NotchPanel(contentRect: CGRect(x: 0, y: 0, width: 600, height: 120))
+
+        XCTAssertTrue(panel.acceptsMouseMovedEvents)
+        XCTAssertFalse(panel.canBecomeKey)
+    }
+
     func testPanelRemainsNonactivatingAndSpaceCompatible() {
         let panel = NotchPanel(contentRect: CGRect(x: 0, y: 0, width: 600, height: 120))
 
@@ -117,6 +131,34 @@ final class PeekPanelContractTests: XCTestCase {
         XCTAssertTrue(panel.collectionBehavior.contains(.fullScreenAuxiliary))
         XCTAssertTrue(panel.collectionBehavior.contains(.stationary))
         XCTAssertTrue(panel.collectionBehavior.contains(.ignoresCycle))
+    }
+}
+
+final class ApprovalPeekCompactPolicyTests: XCTestCase {
+    func testDismissedPeekForcesPhysicalIdleWithoutMutatingLiveLayout() {
+        let original = LiveActivityLayout(
+            leading: WingSlot(symbol: "timer", text: "10:00"),
+            trailing: WingSlot(symbol: "cpu", text: "Agent")
+        )
+
+        let effective = ApprovalPeekCompactPolicy.effectiveLayout(
+            original,
+            isSuppressed: true
+        )
+
+        XCTAssertTrue(effective.isEmpty)
+        XCTAssertFalse(original.isEmpty)
+    }
+
+    func testNormalCompactLayoutRemainsUnchanged() {
+        let original = LiveActivityLayout(
+            leading: WingSlot(symbol: "timer", text: "10:00")
+        )
+
+        XCTAssertEqual(
+            ApprovalPeekCompactPolicy.effectiveLayout(original, isSuppressed: false),
+            original
+        )
     }
 }
 

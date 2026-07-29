@@ -8,10 +8,16 @@ import SwiftUI
 struct CompactNotchView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var live: LiveActivityCoordinator
+    @EnvironmentObject private var approvalPeek: ApprovalPeekCoordinator
     @EnvironmentObject private var layout: NotchLayoutInfo
     @EnvironmentObject private var diagnostics: NotchDiagnostics
 
-    private var current: LiveActivityLayout { live.layout }
+    private var current: LiveActivityLayout {
+        ApprovalPeekCompactPolicy.effectiveLayout(
+            live.layout,
+            isSuppressed: approvalPeek.isSuppressed
+        )
+    }
 
     var body: some View {
         wings(leading: leadingView, trailing: trailingView)
