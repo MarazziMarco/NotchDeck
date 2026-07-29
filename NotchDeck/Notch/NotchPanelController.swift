@@ -2,6 +2,17 @@ import AppKit
 import SwiftUI
 import Combine
 
+/// Defensive view-level pass-through in addition to the window-level mouse
+/// routing. Transparent host pixels never become AppKit hit targets.
+private final class PassthroughHostingView: NSHostingView<AnyView> {
+    var capturesPoint: ((CGPoint) -> Bool)?
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard capturesPoint?(point) ?? true else { return nil }
+        return super.hitTest(point)
+    }
+}
+
 /// Owns the `NotchPanel`, hosts the SwiftUI content, keeps the panel's frame in
 /// sync with the notch geometry and presentation state, feeds screen-coordinate
 /// hot zones to the pointer tracker, and runs a watchdog that re-collapses a
@@ -10,7 +21,7 @@ import Combine
 final class NotchPanelController {
     private let panel: NotchPanel
     private let environment: AppEnvironment
-    private var hostingView: NSHostingView<AnyView>!
+    private var hostingView: PassthroughHostingView!
     private var cancellables = Set<AnyCancellable>()
     private var watchdog: Timer?
 
@@ -23,7 +34,7 @@ final class NotchPanelController {
         self.panel = NotchPanel(contentRect: initialFrame)
 
         let root = environment.inject(NotchRootView())
-        hostingView = NSHostingView(rootView: AnyView(root))
+        hostingView = PassthroughHostingView(rootView: AnyView(root))
         // Grey-corner fix at the composition level: the hosting view and its layer
         // must be fully transparent so nothing rectangular is painted outside the
         // SwiftUI rounded mask. The panel itself is already clear + non-opaque.
@@ -31,6 +42,16 @@ final class NotchPanelController {
         hostingView.layer?.backgroundColor = NSColor.clear.cgColor
         hostingView.layer?.isOpaque = false
         if #available(macOS 13.0, *) { hostingView.sizingOptions = [] }
+        hostingView.capturesPoint = { [weak hostingView, weak tracker = environment.pointerTracker] point in
+            guard let hostingView, let window = hostingView.window, let tracker else { return false }
+            let windowPoint = hostingView.convert(point, to: nil)
+            let screenPoint = window.convertPoint(toScreen: windowPoint)
+            return PeekHitTestPolicy.captures(
+                screenPoint,
+                visibleFrame: tracker.interactiveSurfaceRect,
+                bottomCornerRadius: tracker.interactiveBottomCornerRadius
+            )
+        }
         panel.contentView = hostingView
         panel.backgroundColor = .clear
         panel.isOpaque = false
@@ -69,6 +90,35 @@ final class NotchPanelController {
             .removeDuplicates()
             .sink { [weak self] _ in self?.reposition(animated: false) }
             .store(in: &cancellables)
+
+        environment.approvalPeek.$isHovering
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                if self?.environment.appState.presentation == .peeking {
+                    self?.reposition(animated: true)
+                }
+            }
+            .store(in: &cancellables)
+
+        tracker.$snapshot
+            .map(\.insideInteractiveSurface)
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] inside in
+                self?.panel.ignoresMouseEvents = !inside
+            }
+            .store(in: &cancellables)
+
+        for name in [
+            NSWorkspace.didActivateApplicationNotification,
+            NSWorkspace.activeSpaceDidChangeNotification,
+        ] {
+            NSWorkspace.shared.notificationCenter.publisher(for: name)
+                .receive(on: RunLoop.main)
+                .sink { [weak self] _ in self?.reposition(animated: false) }
+                .store(in: &cancellables)
+        }
 
         // Panel holding key focus == a text field is being edited. Track it so
         // the close logic / watchdog keep the panel open while typing.
@@ -114,8 +164,7 @@ final class NotchPanelController {
     }
 
     private func currentMetrics() -> DisplayMetrics? {
-        let preferMouse = environment.settings.settings.monitorSelection == .followMouse
-        guard let screen = NotchGeometryService.targetScreen(preferMouse: preferMouse) else {
+        guard let screen = targetScreen() else {
             return nil
         }
         return NotchGeometryService.metrics(for: screen)
@@ -142,6 +191,11 @@ final class NotchPanelController {
     }
 
     private func targetScreen() -> NSScreen? {
+        if environment.appState.presentation == .peeking {
+            return NotchGeometryService.frontmostApplicationScreen()
+                ?? NSScreen.main
+                ?? NSScreen.screens.first
+        }
         let preferMouse = environment.settings.settings.monitorSelection == .followMouse
             || environment.settings.settings.followActiveDisplay
         return NotchGeometryService.targetScreen(preferMouse: preferMouse)
@@ -219,23 +273,33 @@ final class NotchPanelController {
             let cHeight = NotchGeometryService.compactHeight(for: metrics)
             layout.panelFrame = NotchResponsiveLayoutService.expandedPanelFrame(
                 screen: geo, layout: contentResponsive, compactHeight: cHeight)
+        } else if state == .peeking {
+            layout.panelFrame = ApprovalPeekGeometry.frame(
+                for: metrics,
+                hovering: environment.approvalPeek.isHovering
+            )
+            layout.contentRect = CGRect(origin: .zero, size: layout.panelFrame.size)
         }
 
         panel.allowsKeyFocus = (state == .expanded)
 
-        let reduceMotion = environment.appState.reduceMotion
-        if animated && !reduceMotion {
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.30
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                panel.animator().setFrame(layout.panelFrame, display: true)
-            }
-        } else {
-            panel.setFrame(layout.panelFrame, display: true)
+        // A single transparent host is large enough for Compact, Peek hover and
+        // Expanded. State changes update only the nested SwiftUI surface; the
+        // NSPanel frame does not animate or repeatedly resize.
+        let hostFrame = persistentHostFrame(metrics: metrics)
+        if !panel.frame.equalTo(hostFrame) {
+            panel.setFrame(hostFrame, display: true)
         }
+        let info = environment.notchLayout
+        info.visibleSurfaceSize = layout.panelFrame.size
+        info.visibleSurfaceOffsetX = layout.panelFrame.midX - hostFrame.midX
+        info.visibleSurfaceTopInset = hostFrame.maxY - layout.panelFrame.maxY
 
-        // Compact panels must not intercept clicks/hover outside the notch.
-        panel.ignoresMouseEvents = false
+        panel.ignoresMouseEvents = !PeekHitTestPolicy.captures(
+            NSEvent.mouseLocation,
+            visibleFrame: layout.panelFrame,
+            bottomCornerRadius: visibleCornerRadius(for: state)
+        )
         if state == .expanded {
             panel.orderFrontRegardless()
         }
@@ -243,6 +307,32 @@ final class NotchPanelController {
         updateHotZones(metrics: metrics, layout: layout, state: state)
         updateCompactLayoutInfo(metrics: metrics)
         updateDiagnostics(metrics: metrics, layout: layout, state: state)
+    }
+
+    private func persistentHostFrame(metrics: DisplayMetrics) -> CGRect {
+        let width = min(
+            NotchResponsiveLayoutService.hardMaxWidth,
+            max(ApprovalPeekGeometry.maximumWidth, metrics.frame.width - 48)
+        )
+        let safeWidth = min(width, metrics.frame.width)
+        let height = min(
+            NotchResponsiveLayoutService.hardMaxHeight
+                + NotchGeometryService.compactHeight(for: metrics),
+            metrics.frame.height
+        )
+        return CGRect(
+            x: (metrics.frame.midX - safeWidth / 2).rounded(),
+            y: (metrics.topAnchorY - height).rounded(),
+            width: safeWidth.rounded(),
+            height: height.rounded()
+        )
+    }
+
+    private func visibleCornerRadius(for state: NotchPresentationState) -> CGFloat {
+        NotchSurfaceGeometry.cornerRadius(
+            presentation: state,
+            compactFocus: environment.notchLayout.compactFocus
+        )
     }
 
     /// Compute the screen-coordinate hot zones. The compact activation zone is
@@ -285,7 +375,12 @@ final class NotchPanelController {
             ? layout.panelFrame.insetBy(dx: -8, dy: -8)
             : .zero
 
-        tracker.updateRects(compact: activation, expanded: expanded)
+        tracker.updateRects(
+            compact: activation,
+            expanded: expanded,
+            interactive: layout.panelFrame,
+            bottomCornerRadius: visibleCornerRadius(for: state)
+        )
     }
 
     /// The compact Focus timer (progress ring + emphasized MM:SS) on a notched

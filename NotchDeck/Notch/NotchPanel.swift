@@ -27,6 +27,7 @@ final class NotchPanel: NSPanel {
         isMovable = false
         isMovableByWindowBackground = false
         hidesOnDeactivate = false
+        becomesKeyOnlyIfNeeded = true
 
         // Visible across every Space and over full-screen apps where allowed.
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]

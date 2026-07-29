@@ -10,8 +10,14 @@ struct DisplayMetrics: Equatable {
     /// Width of the physical notch. Zero on notch-less displays.
     var notchWidth: CGFloat
     var backingScaleFactor: CGFloat
+    /// Usable display frame excluding the menu bar and Dock. Peek uses its top
+    /// edge on displays without a physical notch.
+    var visibleFrame: CGRect? = nil
 
     var hasNotch: Bool { notchHeight > 0 && notchWidth > 0 }
+    var topAnchorY: CGFloat {
+        hasNotch ? frame.maxY : (visibleFrame?.maxY ?? frame.maxY)
+    }
 }
 
 /// Where the panel should sit and how big it is for a given state.
@@ -137,7 +143,7 @@ enum NotchGeometryService {
         // notch. Symmetric layouts centre the panel; the asymmetric Focus capsule
         // pins its notch centre (not the panel centre) to the screen centre.
         let originX = metrics.frame.midX - (notchCentreInPanel ?? panelWidth / 2)
-        let originY = metrics.frame.maxY - panelHeight
+        let originY = metrics.topAnchorY - panelHeight
         let panelFrame = CGRect(x: originX.rounded(),
                                 y: originY.rounded(),
                                 width: panelWidth.rounded(),
@@ -176,7 +182,8 @@ enum NotchGeometryService {
             frame: screen.frame,
             notchHeight: notchHeight,
             notchWidth: notchWidth,
-            backingScaleFactor: screen.backingScaleFactor)
+            backingScaleFactor: screen.backingScaleFactor,
+            visibleFrame: screen.visibleFrame)
     }
 
     /// Pick the target screen: the one containing the mouse, or the main screen.
@@ -188,5 +195,121 @@ enum NotchGeometryService {
             }
         }
         return NSScreen.main ?? NSScreen.screens.first
+    }
+
+    /// The display containing the largest part of the frontmost application's
+    /// foremost layer-zero window. Returns nil when Window Server metadata is
+    /// unavailable so callers can fall back safely.
+    static func frontmostApplicationScreen() -> NSScreen? {
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+              let windowFrame = frontmostWindowFrame(ownerPID: pid),
+              let index = DisplaySelection.index(
+                forFrontmostWindow: windowFrame,
+                screenFrames: NSScreen.screens.map(\.frame)
+              ),
+              NSScreen.screens.indices.contains(index) else { return nil }
+        return NSScreen.screens[index]
+    }
+
+    private static func frontmostWindowFrame(ownerPID: pid_t) -> CGRect? {
+        guard let records = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else { return nil }
+
+        let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
+        for record in records {
+            guard (record[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == ownerPID,
+                  (record[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  let boundsValue = record[kCGWindowBounds as String],
+                  CFGetTypeID(boundsValue as CFTypeRef) == CFDictionaryGetTypeID(),
+                  let quartz = CGRect(
+                    dictionaryRepresentation: boundsValue as! CFDictionary
+                  ),
+                  quartz.width > 0, quartz.height > 0 else { continue }
+            return CGRect(
+                x: quartz.minX,
+                y: primaryTop - quartz.maxY,
+                width: quartz.width,
+                height: quartz.height
+            )
+        }
+        return nil
+    }
+}
+
+enum DisplaySelection {
+    static func index(
+        forFrontmostWindow window: CGRect,
+        screenFrames: [CGRect]
+    ) -> Int? {
+        screenFrames.enumerated()
+            .map { index, frame in
+                (index, frame.intersection(window).area)
+            }
+            .filter { $0.1 > 0 }
+            .max { lhs, rhs in lhs.1 < rhs.1 }?
+            .0
+    }
+}
+
+private extension CGRect {
+    var area: CGFloat {
+        isNull || isInfinite ? 0 : max(0, width) * max(0, height)
+    }
+}
+
+/// Exact visible-surface hit testing. The host window may be much larger than
+/// the strip; only the opaque bottom-rounded shape is interactive.
+enum PeekHitTestPolicy {
+    static func captures(
+        _ point: CGPoint,
+        visibleFrame: CGRect,
+        bottomCornerRadius: CGFloat
+    ) -> Bool {
+        guard visibleFrame.contains(point) else { return false }
+        let radius = min(
+            max(0, bottomCornerRadius),
+            visibleFrame.height,
+            visibleFrame.width / 2
+        )
+        guard radius > 0, point.y < visibleFrame.minY + radius else { return true }
+        if point.x < visibleFrame.minX + radius {
+            let center = CGPoint(
+                x: visibleFrame.minX + radius,
+                y: visibleFrame.minY + radius
+            )
+            return hypot(point.x - center.x, point.y - center.y) <= radius
+        }
+        if point.x > visibleFrame.maxX - radius {
+            let center = CGPoint(
+                x: visibleFrame.maxX - radius,
+                y: visibleFrame.minY + radius
+            )
+            return hypot(point.x - center.x, point.y - center.y) <= radius
+        }
+        return true
+    }
+}
+
+enum ApprovalPeekGeometry {
+    static let minimumWidth: CGFloat = 560
+    static let maximumWidth: CGFloat = 720
+    static let collapsedHeight: CGFloat = 82
+    static let hoverHeight: CGFloat = 126
+
+    static func width(for metrics: DisplayMetrics) -> CGFloat {
+        min(maximumWidth, max(minimumWidth, metrics.frame.width * 0.46))
+    }
+
+    static func frame(for metrics: DisplayMetrics, hovering: Bool) -> CGRect {
+        let width = width(for: metrics)
+        let height = hovering ? hoverHeight : collapsedHeight
+        return CGRect(
+            x: (metrics.frame.midX - width / 2).rounded(),
+            y: (metrics.topAnchorY - height).rounded(),
+            width: width.rounded(),
+            height: height.rounded()
+        )
     }
 }

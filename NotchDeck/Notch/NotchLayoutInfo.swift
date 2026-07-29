@@ -20,6 +20,11 @@ final class NotchLayoutInfo: ObservableObject {
     /// Explicit asymmetric wing widths for compact Focus and Agents.
     @Published var leftWingWidth: CGFloat = 0
     @Published var rightWingWidth: CGFloat = 0
+    /// Visible surface inside the persistent transparent host. The NSPanel keeps
+    /// this larger host stable while SwiftUI animates only this content.
+    @Published var visibleSurfaceSize = CGSize(width: 200, height: 44)
+    @Published var visibleSurfaceOffsetX: CGFloat = 0
+    @Published var visibleSurfaceTopInset: CGFloat = 0
 
     /// Usable wing width on each side of the housing.
     var wingWidth: CGFloat {

@@ -6,6 +6,7 @@ struct PointerSnapshot: Equatable {
     var location: CGPoint
     var insideCompactActivation: Bool
     var insideExpandedPanel: Bool
+    var insideInteractiveSurface: Bool
     var insideAny: Bool { insideCompactActivation || insideExpandedPanel }
 }
 
@@ -18,12 +19,17 @@ struct PointerSnapshot: Equatable {
 @MainActor
 final class PointerTrackingService: ObservableObject {
     @Published private(set) var snapshot = PointerSnapshot(
-        location: .zero, insideCompactActivation: false, insideExpandedPanel: false)
+        location: .zero,
+        insideCompactActivation: false,
+        insideExpandedPanel: false,
+        insideInteractiveSurface: false)
 
     /// Screen-coordinate hot zones, updated by the panel controller on every
     /// reposition / display change.
     private(set) var compactActivationRect: CGRect = .zero
     private(set) var expandedInteractionRect: CGRect = .zero
+    private(set) var interactiveSurfaceRect: CGRect = .zero
+    private(set) var interactiveBottomCornerRadius: CGFloat = 0
 
     private var globalMonitor: Any?
     private var localMonitor: Any?
@@ -34,9 +40,16 @@ final class PointerTrackingService: ObservableObject {
     var isInsideCompactActivationArea: Bool { snapshot.insideCompactActivation }
     var isInsideExpandedPanel: Bool { snapshot.insideExpandedPanel }
 
-    func updateRects(compact: CGRect, expanded: CGRect) {
+    func updateRects(
+        compact: CGRect,
+        expanded: CGRect,
+        interactive: CGRect = .zero,
+        bottomCornerRadius: CGFloat = 0
+    ) {
         compactActivationRect = compact
         expandedInteractionRect = expanded
+        interactiveSurfaceRect = interactive
+        interactiveBottomCornerRadius = bottomCornerRadius
         recompute()
     }
 
@@ -72,16 +85,31 @@ final class PointerTrackingService: ObservableObject {
     }
 
     /// Pure evaluation so it can be unit-tested without event plumbing.
-    nonisolated static func evaluate(location: CGPoint, compact: CGRect, expanded: CGRect) -> PointerSnapshot {
-        PointerSnapshot(location: location,
-                        insideCompactActivation: compact.contains(location),
-                        insideExpandedPanel: expanded.contains(location))
+    nonisolated static func evaluate(
+        location: CGPoint,
+        compact: CGRect,
+        expanded: CGRect,
+        interactive: CGRect = .zero,
+        bottomCornerRadius: CGFloat = 0
+    ) -> PointerSnapshot {
+        PointerSnapshot(
+            location: location,
+            insideCompactActivation: compact.contains(location),
+            insideExpandedPanel: expanded.contains(location),
+            insideInteractiveSurface: PeekHitTestPolicy.captures(
+                location,
+                visibleFrame: interactive,
+                bottomCornerRadius: bottomCornerRadius
+            )
+        )
     }
 
     private func recompute() {
         let next = Self.evaluate(location: NSEvent.mouseLocation,
                                  compact: compactActivationRect,
-                                 expanded: expandedInteractionRect)
+                                 expanded: expandedInteractionRect,
+                                 interactive: interactiveSurfaceRect,
+                                 bottomCornerRadius: interactiveBottomCornerRadius)
         if next != snapshot { snapshot = next }
     }
 }

@@ -81,7 +81,9 @@ final class NotchInteractionCoordinator {
             // Inside the notch or expanded panel: never close.
             if closeTask != nil { closeTask?.cancel(); closeTask = nil }
             guard settings.settings.hoverToOpen, !suspendReopen else { return }
-            if !appState.isExpanded { scheduleOpen(reason: "hover-enter") }
+            if appState.presentation == .compact {
+                scheduleOpen(reason: "hover-enter")
+            }
         } else {
             // Outside both zones.
             openTask?.cancel(); openTask = nil
@@ -107,9 +109,12 @@ final class NotchInteractionCoordinator {
             // outside an unpinned expanded panel dismisses it. Pinning is done
             // exclusively by the Pin button (a SwiftUI Button that consumes its
             // own tap, so it never reaches this monitor as a background click).
-            let inside = tracker.snapshot.insideAny
+            let inside = tracker.snapshot.insideInteractiveSurface
             if inside {
-                if !appState.isExpanded { appState.expand(); diagnostics.noteOpen("click-open") }
+                if appState.presentation == .compact {
+                    appState.expand()
+                    diagnostics.noteOpen("click-open")
+                }
             } else if appState.isExpanded, !appState.isPinnedByUser, !appState.isEditing {
                 appState.compact()
                 appState.setPinnedByUser(false, reason: "outside-click")
@@ -130,7 +135,7 @@ final class NotchInteractionCoordinator {
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled, let self else { return }
             guard self.tracker.snapshot.insideAny, !self.suspendReopen,
-                  !self.appState.isExpanded else { return }
+                  self.appState.presentation == .compact else { return }
             self.appState.expand()
             self.diagnostics.noteOpen(reason)
         }
