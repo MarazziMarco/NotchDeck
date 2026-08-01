@@ -128,6 +128,7 @@ final class ApprovalLifetimeTests: XCTestCase {
                 as? [String: Any]
         )
         object.removeValue(forKey: "approvalAvailability")
+        object.removeValue(forKey: "peekTerminalPendingVisibility")
         object.removeValue(forKey: "moreLayout")
         defaults.set(try JSONSerialization.data(withJSONObject: object), forKey: SettingsStore.storageKey)
 
@@ -135,6 +136,7 @@ final class ApprovalLifetimeTests: XCTestCase {
         XCTAssertFalse(migrated.hoverToOpen)
         XCTAssertEqual(migrated.clipboardMaxItems, 37)
         XCTAssertEqual(migrated.approvalAvailability, .s60)
+        XCTAssertEqual(migrated.peekTerminalPendingVisibility, .s5)
         XCTAssertEqual(migrated.moreLayout, MoreLayoutSettings())
     }
 
@@ -357,6 +359,55 @@ final class ApprovalPeekQueueTests: XCTestCase {
         XCTAssertEqual(snapshot.visible?.transactionID, "expired-locally")
         XCTAssertFalse(snapshot.visible?.isLocallyActionable(at: t0.addingTimeInterval(70)) ?? true)
         XCTAssertEqual(snapshot.visible?.statusText(at: t0.addingTimeInterval(70)), "Respond in Terminal")
+    }
+
+    func testTerminalPendingPeekHidesAfterConfiguredGraceWithoutRemovingTransaction() {
+        let pending = approval("terminal-pending", receivedOffset: 0, state: .fellBack)
+        let one = session(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            current: pending
+        )
+        let snapshot = ApprovalPeekQueue.resolve(sessions: [one])
+
+        let beforeHide = ApprovalPeekVisibility.filtered(
+            snapshot,
+            now: t0.addingTimeInterval(64.999),
+            terminalPendingGrace: 5
+        )
+        let afterHide = ApprovalPeekVisibility.filtered(
+            snapshot,
+            now: t0.addingTimeInterval(65),
+            terminalPendingGrace: 5
+        )
+
+        XCTAssertEqual(beforeHide.visible?.transactionID, "terminal-pending")
+        XCTAssertNil(afterHide.visible)
+        XCTAssertEqual(one.approval?.requestID, "terminal-pending")
+        XCTAssertEqual(one.approval?.state, .fellBack)
+    }
+
+    func testConfiguredTerminalPendingGraceDefaultsToFiveSeconds() {
+        XCTAssertEqual(PeekTerminalPendingVisibility.default, .s5)
+        XCTAssertEqual(PeekTerminalPendingVisibility.s5.seconds, 5)
+        XCTAssertEqual(AppSettings().peekTerminalPendingVisibility, .s5)
+    }
+
+    func testHiddenExpiredHeadAllowsNextActionablePeekToBecomeVisible() {
+        let one = session(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            current: approval("expired-head", receivedOffset: 0, state: .fellBack),
+            queued: [approval("next-actionable", receivedOffset: 10)]
+        )
+        let snapshot = ApprovalPeekQueue.resolve(sessions: [one])
+
+        let filtered = ApprovalPeekVisibility.filtered(
+            snapshot,
+            now: t0.addingTimeInterval(65),
+            terminalPendingGrace: 5
+        )
+
+        XCTAssertEqual(filtered.visible?.transactionID, "next-actionable")
+        XCTAssertEqual(filtered.totalCount, 1)
     }
 
     func testProgressUsesOriginalAbsoluteDeadline() {

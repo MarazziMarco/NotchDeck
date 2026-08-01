@@ -192,6 +192,9 @@ struct AppSettings: Codable, Equatable {
     /// Terminal remains answerable throughout. Existing pending transactions keep
     /// the deadline assigned when they arrived; only new requests use a new value.
     var approvalAvailability: ApprovalAvailability = .default
+    /// Presentation-only grace for the non-actionable terminal-pending Peek.
+    /// The underlying approval remains authoritative after the strip hides.
+    var peekTerminalPendingVisibility: PeekTerminalPendingVisibility = .default
     var recentSessionLimit: RecentSessionLimit = .ten
     var showCompletedSessions: Bool = true
     var showFailedSessions: Bool = true
