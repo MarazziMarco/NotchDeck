@@ -80,9 +80,18 @@ final class AppEnvironment: ObservableObject {
         // any decision reaches the bridge (fail-closed). Skipped under XCTest so
         // unit runs don't start a listener or write the rendezvous file.
         let bridge = self.terminalBridge
-        self.agentDecisionService = AgentDecisionSocket { requestID, allow in
+        let coordinator = self.agents
+        let sessions = store
+        self.agentDecisionService = AgentDecisionSocket(onResolve: { requestID, allow in
             await bridge.respond(requestID: requestID, allow: allow, message: nil)
-        }
+        }, onFocus: { tx in
+            // "Details" slot in Arcus: raise the agent's terminal for this request.
+            Task { @MainActor in
+                guard let uuid = await bridge.appSessionID(forTransaction: tx),
+                      let session = sessions.session(id: uuid) else { return }
+                coordinator.focusTerminal(session)
+            }
+        })
         if NSClassFromString("XCTestCase") == nil {
             self.agentDecisionService.start()
             // Push presented permission requests to verified external responders.
