@@ -29,7 +29,7 @@ final class AppEnvironment: ObservableObject {
     /// Verified decision channel for external responders (Arcus). Peer-verified,
     /// fail-closed; maps accept/deny onto the bridge. Inert until a verified peer
     /// connects, so it is harmless when the Agents module is off.
-    let agentDecisionService: AgentDecisionService
+    let agentDecisionService: AgentDecisionSocket
     let quickNote: QuickNoteService
     let nowPlaying: NowPlayingService
     let battery: BatteryService
@@ -80,12 +80,11 @@ final class AppEnvironment: ObservableObject {
         // any decision reaches the bridge (fail-closed). Skipped under XCTest so
         // unit runs don't start a listener or write the rendezvous file.
         let bridge = self.terminalBridge
-        self.agentDecisionService = AgentDecisionService.anonymous { requestID, allow in
+        self.agentDecisionService = AgentDecisionSocket { requestID, allow in
             await bridge.respond(requestID: requestID, allow: allow, message: nil)
         }
         if NSClassFromString("XCTestCase") == nil {
             self.agentDecisionService.start()
-            AgentDecisionRendezvous.publish(self.agentDecisionService.endpoint)
             // Push presented permission requests to verified external responders.
             let decision = self.agentDecisionService
             Task {
