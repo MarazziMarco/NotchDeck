@@ -118,14 +118,29 @@ final class AgentDecisionService: NSObject, NSXPCListenerDelegate, NotchAgentDec
     private let requirement: String
     private let onResolve: (_ requestID: String, _ allow: Bool) async -> Bool
 
-    init(requirement: String = PeerRequirement.arcusSelfSigned,
+    /// Designated: run over any listener. A non-sandboxed GUI app cannot vend a
+    /// global Mach name without launchd, so production uses an ANONYMOUS listener
+    /// whose endpoint is published to a 0600 rendezvous file (see
+    /// AgentDecisionRendezvous); the peer is still verified before anything runs.
+    init(listener: NSXPCListener,
+         requirement: String = PeerRequirement.arcusSelfSigned,
          onResolve: @escaping (_ requestID: String, _ allow: Bool) async -> Bool) {
-        self.listener = NSXPCListener(machServiceName: Self.machServiceName)
+        self.listener = listener
         self.requirement = requirement
         self.onResolve = onResolve
         super.init()
         listener.delegate = self
     }
+
+    /// Anonymous listener — the production transport (no launchd needed).
+    static func anonymous(requirement: String = PeerRequirement.arcusSelfSigned,
+                          onResolve: @escaping (_ requestID: String, _ allow: Bool) async -> Bool)
+        -> AgentDecisionService {
+        AgentDecisionService(listener: NSXPCListener.anonymous(),
+                             requirement: requirement, onResolve: onResolve)
+    }
+
+    var endpoint: NSXPCListenerEndpoint { listener.endpoint }
 
     func start() { listener.resume() }
     func stop() { listener.invalidate() }
@@ -169,4 +184,46 @@ final class AgentDecisionService: NSObject, NSXPCListenerDelegate, NotchAgentDec
         }
         return token
     }
+}
+
+// MARK: - Rendezvous (endpoint hand-off without launchd)
+
+/// NotchDeck publishes its anonymous listener endpoint to a 0600 file that only
+/// the same user can read; Arcus reads it and connects. A forged endpoint only
+/// lets a caller *attempt* a connection — it is still peer-verified before any
+/// decision is honoured, so the file's confidentiality is defence in depth, not
+/// the trust boundary.
+enum AgentDecisionRendezvous {
+    /// Shared, user-only location (same 0700 dir the bridge already owns).
+    static func endpointURL() -> URL {
+        TerminalAgentProtocol.socketURL()
+            .deletingLastPathComponent()
+            .appendingPathComponent("agent-decision.endpoint")
+    }
+
+    @discardableResult
+    static func publish(_ endpoint: NSXPCListenerEndpoint) -> Bool {
+        let url = endpointURL()
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            let data = try NSKeyedArchiver.archivedData(withRootObject: endpoint,
+                                                        requiringSecureCoding: true)
+            try data.write(to: url, options: [.atomic])
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            return true
+        } catch {
+            Log.agents.error("decision rendezvous publish failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    static func read() -> NSXPCListenerEndpoint? {
+        guard let data = try? Data(contentsOf: endpointURL()) else { return nil }
+        return try? NSKeyedUnarchiver.unarchivedObject(ofClass: NSXPCListenerEndpoint.self, from: data)
+    }
+
+    static func clear() { try? FileManager.default.removeItem(at: endpointURL()) }
 }

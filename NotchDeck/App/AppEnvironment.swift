@@ -26,6 +26,10 @@ final class AppEnvironment: ObservableObject {
     let dashboard: DashboardModel
     let terminalBridge: TerminalAgentBridge
     let terminalStats: TerminalBridgeStats
+    /// Verified decision channel for external responders (Arcus). Peer-verified,
+    /// fail-closed; maps accept/deny onto the bridge. Inert until a verified peer
+    /// connects, so it is harmless when the Agents module is off.
+    let agentDecisionService: AgentDecisionService
     let quickNote: QuickNoteService
     let nowPlaying: NowPlayingService
     let battery: BatteryService
@@ -71,6 +75,18 @@ final class AppEnvironment: ObservableObject {
         let stats = TerminalBridgeStats()
         self.terminalStats = stats
         self.terminalBridge = TerminalAgentBridge(store: store, stats: stats)
+        // Verified decision channel: an external responder (Arcus) can accept/deny
+        // over an anonymous XPC endpoint. The peer is code-signing verified before
+        // any decision reaches the bridge (fail-closed). Skipped under XCTest so
+        // unit runs don't start a listener or write the rendezvous file.
+        let bridge = self.terminalBridge
+        self.agentDecisionService = AgentDecisionService.anonymous { requestID, allow in
+            await bridge.respond(requestID: requestID, allow: allow, message: nil)
+        }
+        if NSClassFromString("XCTestCase") == nil {
+            self.agentDecisionService.start()
+            AgentDecisionRendezvous.publish(self.agentDecisionService.endpoint)
+        }
         self.quickNote = QuickNoteService()
         self.nowPlaying = NowPlayingService(provider: mediaProvider)
         self.battery = BatteryService()
