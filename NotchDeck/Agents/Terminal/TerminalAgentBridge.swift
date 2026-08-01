@@ -275,6 +275,15 @@ private struct PendingApprovalConnection {
     let actionableUntil: Date
 }
 
+/// A permission request surfaced to an external verified responder (Arcus).
+struct ExternalPendingRequest: Sendable {
+    let transactionID: String
+    let agent: String
+    let summary: String
+    let detail: String
+    let expiresAt: Date
+}
+
 /// Local, user-only bridge that receives real-time events from hook-connected
 /// terminal agent sessions over a Unix-domain socket and reflects them into the
 /// `AgentSessionStore`. Also answers permission requests with an Allow/Deny
@@ -304,6 +313,13 @@ actor TerminalAgentBridge {
     private var lastSeen: [UUID: Date] = [:]
 
     private let heartbeatTimeout: TimeInterval = 45
+
+    /// Optional sink: pushes a presented permission request to an external verified
+    /// responder (the Arcus decision channel). Additive; nil = no external peer.
+    private var externalNotify: (@Sendable (ExternalPendingRequest) -> Void)?
+    func setExternalNotify(_ cb: @escaping @Sendable (ExternalPendingRequest) -> Void) {
+        externalNotify = cb
+    }
 
     /// Permission UX configuration (set from settings via `configure`).
     private var handlingMode: AgentPermissionHandlingMode = .notchWithTerminalFallback
@@ -536,6 +552,19 @@ actor TerminalAgentBridge {
                 await MainActor.run { [stats] in stats.recordDecoded(type: reason, connectedTitle: "") }
                 releaseForFallback(requestID: transactionID)
                 return
+            }
+            // Presented in the notch UI → also push to any verified external
+            // responder (Arcus). Fire-and-forget; the decision still returns over
+            // the verified channel and is applied by `respond`.
+            if let externalNotify {
+                let summaryText = AgentLatestMessage.sanitize(event.summary
+                    ?? event.toolName.map { "\($0) — permission requested" } ?? "Permission requested")
+                externalNotify(ExternalPendingRequest(
+                    transactionID: transactionID,
+                    agent: providerKind == .claudeCode ? "Claude Code" : "Codex",
+                    summary: summaryText,
+                    detail: event.toolName ?? summaryText,
+                    expiresAt: Date().addingTimeInterval(approvalLifetime)))
             }
         }
 
