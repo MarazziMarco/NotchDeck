@@ -127,6 +127,41 @@ final class NotchGeometryServiceTests: XCTestCase {
             bottomCornerRadius: 20
         ).insideInteractiveSurface)
     }
+
+    func testPersistentHostContainsWidestUtilitiesHomeSurface() {
+        let frame = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+        let metrics = DisplayMetrics(
+            frame: frame,
+            notchHeight: 32,
+            notchWidth: 200,
+            backingScaleFactor: 2,
+            visibleFrame: frame
+        )
+        let screen = ScreenGeometry(
+            frame: frame,
+            visibleFrame: frame,
+            notchWidth: 200,
+            notchHeight: 32,
+            backingScaleFactor: 2
+        )
+        let responsive = NotchResponsiveLayoutService.compute(
+            screen: screen,
+            face: .utilities,
+            prefs: .init(width: .wide, tabLabels: .iconsAndLabels),
+            accessibility: .init(),
+            tab: .home
+        )
+        let expanded = NotchResponsiveLayoutService.expandedPanelFrame(
+            screen: screen,
+            layout: responsive,
+            compactHeight: NotchGeometryService.compactHeight(for: metrics)
+        )
+
+        let host = PersistentNotchHostGeometry.frame(for: metrics)
+
+        XCTAssertEqual(expanded.width, UtilitiesWidthProfile.home.hardMax)
+        XCTAssertTrue(host.contains(expanded), "Host \(host) must contain Home \(expanded)")
+    }
 }
 
 @MainActor
@@ -135,6 +170,67 @@ final class PeekPanelContractTests: XCTestCase {
         let host = PassthroughHostingView(rootView: AnyView(EmptyView()))
 
         XCTAssertTrue(host.acceptsFirstMouse(for: nil))
+    }
+
+    func testNonactivatingPanelDeliversClickToSwiftUIButton() {
+        var clickCount = 0
+        let panel = NotchPanel(contentRect: CGRect(x: 100, y: 100, width: 240, height: 100))
+        let host = PassthroughHostingView(
+            rootView: AnyView(
+                Button("Allow") { clickCount += 1 }
+                    .frame(width: 120, height: 44)
+            )
+        )
+        panel.contentView = host
+        panel.ignoresMouseEvents = false
+        panel.orderFrontRegardless()
+        host.layoutSubtreeIfNeeded()
+
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = NSEvent.mouseEvent(
+                with: type,
+                location: CGPoint(x: 120, y: 50),
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: panel.windowNumber,
+                context: nil,
+                eventNumber: 1,
+                clickCount: 1,
+                pressure: type == .leftMouseDown ? 1 : 0
+            )!
+            NSApp.sendEvent(event)
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        panel.orderOut(nil)
+
+        XCTAssertEqual(clickCount, 1)
+    }
+
+    func testHostingViewDoesNotSecondGuessAcceptedWindowRouting() {
+        let environment = AppEnvironment(
+            settings: SettingsStore.inMemory(),
+            mediaProvider: FakeNowPlayingProvider()
+        )
+        let controller = NotchPanelController(environment: environment)
+        guard let host = controller.window.contentView as? PassthroughHostingView else {
+            return XCTFail("Expected the Notch panel hosting view")
+        }
+
+        // Simulate the exact runtime disagreement that broke Peek: the panel has
+        // already accepted the event, while a stale/empty tracker rect would have
+        // made the former duplicate hosting-view gate reject it.
+        environment.pointerTracker.updateRects(
+            compact: .zero,
+            expanded: .zero,
+            interactive: .zero
+        )
+        controller.window.ignoresMouseEvents = false
+        host.layoutSubtreeIfNeeded()
+
+        XCTAssertNotNil(host.hitTest(CGPoint(x: host.bounds.midX, y: host.bounds.midY)))
+
+        controller.window.orderOut(nil)
+        environment.handleQuit()
     }
 
     func testPanelReceivesMouseMovementWithoutBecomingKey() {

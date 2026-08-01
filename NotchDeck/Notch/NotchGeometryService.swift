@@ -30,6 +30,34 @@ struct NotchLayout: Equatable {
     var contentRect: CGRect
 }
 
+/// Geometry for the transparent, nonactivating host window. It must contain the
+/// widest possible visible surface even though most of its pixels pass through
+/// to the app underneath.
+enum PersistentNotchHostGeometry {
+    static func frame(for metrics: DisplayMetrics) -> CGRect {
+        let maximumExpandedWidth = max(
+            NotchResponsiveLayoutService.hardMaxWidth,
+            UtilitiesWidthProfile.home.hardMax
+        )
+        let width = min(
+            maximumExpandedWidth,
+            max(ApprovalPeekGeometry.maximumWidth, metrics.frame.width - 48)
+        )
+        let safeWidth = min(width, metrics.frame.width)
+        let height = min(
+            NotchResponsiveLayoutService.hardMaxHeight
+                + NotchGeometryService.compactHeight(for: metrics),
+            metrics.frame.height
+        )
+        return CGRect(
+            x: (metrics.frame.midX - safeWidth / 2).rounded(),
+            y: (metrics.topAnchorY - height).rounded(),
+            width: safeWidth.rounded(),
+            height: height.rounded()
+        )
+    }
+}
+
 /// Computes notch panel geometry. Never hard-codes coordinates for a specific
 /// MacBook — everything derives from the supplied `DisplayMetrics`.
 enum NotchGeometryService {

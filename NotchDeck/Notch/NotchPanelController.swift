@@ -2,21 +2,15 @@ import AppKit
 import SwiftUI
 import Combine
 
-/// Defensive view-level pass-through in addition to the window-level mouse
-/// routing. Transparent host pixels never become AppKit hit targets.
+/// Hosting view for a nonactivating panel. Window-level routing is the sole
+/// authority for visible-surface hit testing; applying a second screen-space
+/// gate here can reject a click the panel has already accepted.
 final class PassthroughHostingView: NSHostingView<AnyView> {
-    var capturesPoint: ((CGPoint) -> Bool)?
-
     /// A nonactivating panel never becomes key on a Peek button click. Accept
     /// that first click explicitly so SwiftUI controls still receive it while
     /// Terminal or the editor remains frontmost.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        guard capturesPoint?(point) ?? true else { return nil }
-        return super.hitTest(point)
     }
 }
 
@@ -49,16 +43,6 @@ final class NotchPanelController {
         hostingView.layer?.backgroundColor = NSColor.clear.cgColor
         hostingView.layer?.isOpaque = false
         if #available(macOS 13.0, *) { hostingView.sizingOptions = [] }
-        hostingView.capturesPoint = { [weak hostingView, weak tracker = environment.pointerTracker] point in
-            guard let hostingView, let window = hostingView.window, let tracker else { return false }
-            let windowPoint = hostingView.convert(point, to: nil)
-            let screenPoint = window.convertPoint(toScreen: windowPoint)
-            return PeekHitTestPolicy.captures(
-                screenPoint,
-                visibleFrame: tracker.interactiveSurfaceRect,
-                bottomCornerRadius: tracker.interactiveBottomCornerRadius
-            )
-        }
         panel.contentView = hostingView
         panel.backgroundColor = .clear
         panel.isOpaque = false
@@ -307,7 +291,7 @@ final class NotchPanelController {
         // A single transparent host is large enough for Compact, Peek hover and
         // Expanded. State changes update only the nested SwiftUI surface; the
         // NSPanel frame does not animate or repeatedly resize.
-        let hostFrame = persistentHostFrame(metrics: metrics)
+        let hostFrame = PersistentNotchHostGeometry.frame(for: metrics)
         if !panel.frame.equalTo(hostFrame) {
             panel.setFrame(hostFrame, display: true)
         }
@@ -328,25 +312,6 @@ final class NotchPanelController {
         updateHotZones(metrics: metrics, layout: layout, state: state)
         updateCompactLayoutInfo(metrics: metrics)
         updateDiagnostics(metrics: metrics, layout: layout, state: state)
-    }
-
-    private func persistentHostFrame(metrics: DisplayMetrics) -> CGRect {
-        let width = min(
-            NotchResponsiveLayoutService.hardMaxWidth,
-            max(ApprovalPeekGeometry.maximumWidth, metrics.frame.width - 48)
-        )
-        let safeWidth = min(width, metrics.frame.width)
-        let height = min(
-            NotchResponsiveLayoutService.hardMaxHeight
-                + NotchGeometryService.compactHeight(for: metrics),
-            metrics.frame.height
-        )
-        return CGRect(
-            x: (metrics.frame.midX - safeWidth / 2).rounded(),
-            y: (metrics.topAnchorY - height).rounded(),
-            width: safeWidth.rounded(),
-            height: height.rounded()
-        )
     }
 
     private func visibleCornerRadius(for state: NotchPresentationState) -> CGFloat {
