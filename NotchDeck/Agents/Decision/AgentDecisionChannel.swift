@@ -129,10 +129,15 @@ final class AgentDecisionSocket: @unchecked Sendable {
     private var peers = Set<Int32>()            // verified client fds
     private let writeLock = NSLock()            // serialise frame writes
 
+    /// Optional: raise the agent's terminal for a request (the "Details" slot).
+    private let onFocus: (@Sendable (_ requestID: String) -> Void)?
+
     init(requirement: String = PeerRequirement.arcusSelfSigned,
-         onResolve: @escaping (_ requestID: String, _ allow: Bool) async -> Bool) {
+         onResolve: @escaping (_ requestID: String, _ allow: Bool) async -> Bool,
+         onFocus: (@Sendable (_ requestID: String) -> Void)? = nil) {
         self.requirement = requirement
         self.onResolve = onResolve
+        self.onFocus = onFocus
     }
 
     func start() {
@@ -209,15 +214,23 @@ final class AgentDecisionSocket: @unchecked Sendable {
 
     private func handleFrame(_ data: Data, fd: Int32) {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              obj["type"] as? String == "resolve",
-              let payload = obj["payload"],
-              let pd = try? JSONSerialization.data(withJSONObject: payload),
-              let res = try? JSONDecoder().decode(AgentResolutionWire.self, from: pd) else { return }
-        let (requestID, allow) = DecisionMapper.bridgeDecision(from: res)
-        Task { [weak self] in
-            let applied = await self?.onResolve(requestID, allow) ?? false
-            self?.writeFrame(["type": "ack", "id": res.id.uuidString,
-                              "status": applied ? "applied" : "rejected"], to: fd)
+              let type = obj["type"] as? String else { return }
+        switch type {
+        case "resolve":
+            guard let payload = obj["payload"],
+                  let pd = try? JSONSerialization.data(withJSONObject: payload),
+                  let res = try? JSONDecoder().decode(AgentResolutionWire.self, from: pd) else { return }
+            let (requestID, allow) = DecisionMapper.bridgeDecision(from: res)
+            Task { [weak self] in
+                let applied = await self?.onResolve(requestID, allow) ?? false
+                self?.writeFrame(["type": "ack", "id": res.id.uuidString,
+                                  "status": applied ? "applied" : "rejected"], to: fd)
+            }
+        case "focus":
+            // Raise the agent's terminal for this request (no decision made).
+            if let id = obj["id"] as? String { onFocus?(id) }
+        default:
+            break
         }
     }
 

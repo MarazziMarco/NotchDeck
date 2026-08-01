@@ -933,6 +933,12 @@ actor TerminalAgentBridge {
 
     // MARK: Approvals
 
+    /// The app session that owns a pending transaction (for the external "focus
+    /// terminal" request). nil if the transaction is unknown/already resolved.
+    func appSessionID(forTransaction tx: String) -> UUID? {
+        pendingApprovals[tx]?.appSessionID
+    }
+
     @discardableResult
     func respond(requestID: String, allow: Bool, message: String?) -> Bool {
         guard let connection = pendingApprovals[requestID] else { return false }
