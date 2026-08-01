@@ -108,15 +108,36 @@ enum PeerCodeVerifier {
     func resolve(_ resolution: Data, withReply reply: @escaping (Data?) -> Void)
 }
 
+/// The interface Arcus exports (notify). NotchDeck calls this to push a pending
+/// request so Arcus opens its response menu. Selector matches Arcus' ArcusNotifyXPC.
+@objc protocol ArcusNotifyXPC {
+    func present(_ requestData: Data)
+}
+
+/// A pending request pushed to Arcus. Encodes to the exact JSON shape Arcus'
+/// AgentRequest decodes (riskClass as its rawValue string).
+struct AgentRequestWire: Codable {
+    let id: UUID
+    let agent: String
+    let summary: String
+    let detail: String
+    let riskClass: String       // "low" | "medium" | "high"
+    let expiresAtMs: Double
+}
+
 /// Vends the verified decision channel and dispatches accepted resolutions into
 /// the bridge. `onResolve` returns whether the bridge actually applied it (a
 /// missing / expired request returns false → the peer gets a rejected ack).
-final class AgentDecisionService: NSObject, NSXPCListenerDelegate, NotchAgentDecisionXPC {
+final class AgentDecisionService: NSObject, NSXPCListenerDelegate, NotchAgentDecisionXPC, @unchecked Sendable {
     static let machServiceName = "com.notchdeck.agentdecision"
 
     private let listener: NSXPCListener
     private let requirement: String
     private let onResolve: (_ requestID: String, _ allow: Bool) async -> Bool
+    /// Verified peers to push notifications to. Guarded — mutated from the XPC
+    /// delegate thread and read from notify().
+    private let peersLock = NSLock()
+    private var peers: [NSXPCConnection] = []
 
     /// Designated: run over any listener. A non-sandboxed GUI app cannot vend a
     /// global Mach name without launchd, so production uses an ANONYMOUS listener
@@ -155,8 +176,27 @@ final class AgentDecisionService: NSObject, NSXPCListenerDelegate, NotchAgentDec
         }
         conn.exportedInterface = NSXPCInterface(with: NotchAgentDecisionXPC.self)
         conn.exportedObject = self
+        // We also CALL the peer (notify): push pending requests to Arcus.
+        conn.remoteObjectInterface = NSXPCInterface(with: ArcusNotifyXPC.self)
+        conn.invalidationHandler = { [weak self, weak conn] in self?.dropPeer(conn) }
+        conn.interruptionHandler = { [weak self, weak conn] in self?.dropPeer(conn) }
+        peersLock.lock(); peers.append(conn); peersLock.unlock()
         conn.resume()
         return true
+    }
+
+    private func dropPeer(_ conn: NSXPCConnection?) {
+        guard let conn else { return }
+        peersLock.lock(); peers.removeAll { $0 === conn }; peersLock.unlock()
+    }
+
+    /// Push a pending request to every verified Arcus peer (best-effort).
+    func notify(_ request: AgentRequestWire) {
+        guard let data = try? JSONEncoder().encode(request) else { return }
+        peersLock.lock(); let targets = peers; peersLock.unlock()
+        for conn in targets {
+            (conn.remoteObjectProxy as? ArcusNotifyXPC)?.present(data)
+        }
     }
 
     // MARK: NotchAgentDecisionXPC

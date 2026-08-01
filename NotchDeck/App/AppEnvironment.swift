@@ -86,6 +86,16 @@ final class AppEnvironment: ObservableObject {
         if NSClassFromString("XCTestCase") == nil {
             self.agentDecisionService.start()
             AgentDecisionRendezvous.publish(self.agentDecisionService.endpoint)
+            // Push presented permission requests to verified external responders.
+            let decision = self.agentDecisionService
+            Task {
+                await bridge.setExternalNotify { req in
+                    guard let uuid = UUID(uuidString: req.transactionID) else { return }
+                    decision.notify(AgentRequestWire(
+                        id: uuid, agent: req.agent, summary: req.summary, detail: req.detail,
+                        riskClass: "medium", expiresAtMs: req.expiresAt.timeIntervalSince1970 * 1000))
+                }
+            }
         }
         self.quickNote = QuickNoteService()
         self.nowPlaying = NowPlayingService(provider: mediaProvider)

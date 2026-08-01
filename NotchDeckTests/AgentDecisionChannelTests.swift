@@ -92,6 +92,18 @@ final class AgentDecisionChannelTests: XCTestCase {
         XCTAssertEqual(box.allow, true)
     }
 
+    func testRequestWireMatchesArcusShape() throws {
+        let id = UUID()
+        let req = AgentRequestWire(id: id, agent: "Claude Code", summary: "Run tests",
+                                   detail: "swift test", riskClass: "medium", expiresAtMs: 123456)
+        let obj = try JSONSerialization.jsonObject(with: JSONEncoder().encode(req)) as? [String: Any]
+        XCTAssertEqual(obj?["id"] as? String, id.uuidString)      // uppercase, matches Arcus
+        XCTAssertEqual(obj?["agent"] as? String, "Claude Code")
+        XCTAssertEqual(obj?["riskClass"] as? String, "medium")
+        XCTAssertEqual(obj?["expiresAtMs"] as? Double, 123456)
+        XCTAssertNotNil(obj?["summary"]); XCTAssertNotNil(obj?["detail"])
+    }
+
     // MARK: helpers
 
     private final class ResultBox: @unchecked Sendable {
