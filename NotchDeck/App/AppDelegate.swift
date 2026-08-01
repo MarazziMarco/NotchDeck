@@ -38,7 +38,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             appState: environment.appState,
             settings: environment.settings,
             tracker: environment.pointerTracker,
-            diagnostics: environment.diagnostics)
+            diagnostics: environment.diagnostics,
+            approvalPeek: environment.approvalPeek)
         interaction.start()
         self.interaction = interaction
         environment.interaction = interaction

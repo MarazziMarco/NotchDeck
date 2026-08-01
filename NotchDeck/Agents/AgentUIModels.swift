@@ -692,6 +692,8 @@ struct ApprovalPeekPresentation: Equatable {
     let focusAccessibilityLabel: String
     let dismissAccessibilityLabel: String
     let expandAccessibilityLabel: String
+    let utilitiesAccessibilityLabel: String
+    let settingsAccessibilityLabel: String
     let expiredStatus = "Respond in Terminal"
 
     init(item: ApprovalPeekItem, totalCount: Int) {
@@ -718,7 +720,11 @@ struct ApprovalPeekPresentation: Equatable {
         dismissAccessibilityLabel =
             "Hide \(providerName) approval strip; keep the request pending in Terminal"
         expandAccessibilityLabel =
-            "Open full \(providerName) approval details"
+            "Open full Agents for \(providerName) approval"
+        utilitiesAccessibilityLabel =
+            "Open Utilities; keep \(providerName) approval pending"
+        settingsAccessibilityLabel =
+            "Open Settings; keep \(providerName) approval pending"
     }
 
     var isCommand: Bool {

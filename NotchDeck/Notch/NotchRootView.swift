@@ -201,11 +201,25 @@ struct ApprovalPeekView: View {
     ) -> some View {
         HStack(spacing: 5) {
             peekIconButton(
-                symbol: "chevron.up",
-                accessibilityLabel: presentation.expandAccessibilityLabel,
-                help: "Open full approval details"
+                symbol: "square.grid.2x2",
+                accessibilityLabel: presentation.utilitiesAccessibilityLabel,
+                help: "Open Utilities; keep approval pending"
             ) {
-                peek.openExpanded()
+                peek.openExpanded(face: .utilities)
+            }
+            peekIconButton(
+                symbol: "rectangle.expand.vertical",
+                accessibilityLabel: presentation.expandAccessibilityLabel,
+                help: "Open full Agents"
+            ) {
+                peek.openExpanded(face: .agents)
+            }
+            peekIconButton(
+                symbol: "gearshape",
+                accessibilityLabel: presentation.settingsAccessibilityLabel,
+                help: "Open Settings; keep approval pending"
+            ) {
+                SettingsWindowPresenter.shared.show()
             }
             peekIconButton(
                 symbol: "xmark",

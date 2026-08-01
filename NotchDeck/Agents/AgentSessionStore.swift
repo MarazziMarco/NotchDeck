@@ -206,6 +206,10 @@ final class ApprovalPeekCoordinator: ObservableObject {
     /// The authoritative transactions, deadlines and Terminal surface remain
     /// untouched.
     @Published private(set) var isSuppressed = false
+    /// Presentation-only suspension while Settings or another secondary window
+    /// is visible. The transaction remains pending and keeps its original
+    /// deadline; only the automatic Peek projection is temporarily hidden.
+    @Published private(set) var isPresentationSuspended = false
 
     private weak var appState: AppState?
     private var cancellables = Set<AnyCancellable>()
@@ -227,9 +231,7 @@ final class ApprovalPeekCoordinator: ObservableObject {
                 self.isAutoPresentationEnabled = isEnabled
                 self.snapshot = next
                 self.reconcileSuppression(with: next)
-                self.appState?.handle(.approvalPeekAvailable(
-                    isEnabled && next.visible != nil && !self.isSuppressed
-                ))
+                self.appState?.handle(.approvalPeekAvailable(self.shouldPresentPeek))
             }
             .store(in: &cancellables)
     }
@@ -251,15 +253,31 @@ final class ApprovalPeekCoordinator: ObservableObject {
         appState?.handle(.approvalPeekAvailable(false))
     }
 
-    /// Explicitly open the normal full-size Agents surface. This is the only
-    /// Peek control allowed to request an activating/expanded presentation.
-    func openExpanded() {
+    func suspendForSecondaryWindow() {
+        guard !isPresentationSuspended else { return }
+        isPresentationSuspended = true
+        setHovering(false)
+        appState?.handle(.approvalPeekAvailable(false))
+    }
+
+    func resumeAfterSecondaryWindow() {
+        guard isPresentationSuspended else { return }
+        isPresentationSuspended = false
+        appState?.handle(.approvalPeekAvailable(shouldPresentPeek))
+    }
+
+    /// Explicitly open one of the existing full-size notch faces without
+    /// changing the authoritative approval transaction.
+    func openExpanded(face: NotchFace = .agents) {
         isSuppressed = false
         suppressedTransactionIDs.removeAll()
-        appState?.handle(.approvalPeekAvailable(
-            isAutoPresentationEnabled && snapshot.visible != nil
-        ))
-        appState?.expand(face: .agents)
+        appState?.handle(.approvalPeekAvailable(shouldPresentPeek))
+        appState?.expand(face: face)
+    }
+
+    private var shouldPresentPeek: Bool {
+        isAutoPresentationEnabled && snapshot.visible != nil
+            && !isSuppressed && !isPresentationSuspended
     }
 
     private func reconcileSuppression(with next: ApprovalPeekQueueSnapshot) {

@@ -429,7 +429,11 @@ final class ApprovalPeekQueueTests: XCTestCase {
         XCTAssertTrue(presentation.denyAccessibilityLabel.contains("Deny"))
         XCTAssertTrue(presentation.focusAccessibilityLabel.contains("Terminal"))
         XCTAssertTrue(presentation.dismissAccessibilityLabel.contains("pending in Terminal"))
-        XCTAssertTrue(presentation.expandAccessibilityLabel.contains("full"))
+        XCTAssertTrue(presentation.expandAccessibilityLabel.contains("Agents"))
+        XCTAssertTrue(presentation.utilitiesAccessibilityLabel.contains("Utilities"))
+        XCTAssertTrue(presentation.utilitiesAccessibilityLabel.contains("pending"))
+        XCTAssertTrue(presentation.settingsAccessibilityLabel.contains("Settings"))
+        XCTAssertTrue(presentation.settingsAccessibilityLabel.contains("pending"))
     }
 
     func testExpiredPeekWordingDoesNotClaimTerminalAppearsAfterTimeout() throws {

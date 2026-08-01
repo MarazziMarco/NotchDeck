@@ -103,6 +103,30 @@ final class NotchGeometryServiceTests: XCTestCase {
             bottomCornerRadius: 20
         ))
     }
+
+    func testExpandedHitTestingAfterPeekCapturesExpandedControls() {
+        let peek = CGRect(x: 300, y: 900, width: 600, height: 82)
+        let expanded = CGRect(x: 200, y: 500, width: 800, height: 482)
+        let control = CGPoint(x: 250, y: 940)
+
+        XCTAssertFalse(PeekHitTestPolicy.captures(
+            control,
+            visibleFrame: peek,
+            bottomCornerRadius: 20
+        ))
+        XCTAssertTrue(PeekHitTestPolicy.captures(
+            control,
+            visibleFrame: expanded,
+            bottomCornerRadius: 20
+        ))
+        XCTAssertTrue(PointerTrackingService.evaluate(
+            location: control,
+            compact: .zero,
+            expanded: expanded,
+            interactive: expanded,
+            bottomCornerRadius: 20
+        ).insideInteractiveSurface)
+    }
 }
 
 @MainActor

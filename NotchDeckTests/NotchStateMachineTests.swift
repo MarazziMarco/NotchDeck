@@ -1,4 +1,5 @@
 import XCTest
+import Combine
 @testable import NotchDeck
 
 final class NotchStateMachineTests: XCTestCase {
@@ -16,6 +17,32 @@ final class NotchStateMachineTests: XCTestCase {
         XCTAssertTrue(m.apply(.approvalPeekAvailable(true)))
 
         XCTAssertEqual(m.presentation, .peeking)
+    }
+
+    func testClickFromPeekOpensExpanded() {
+        var m = NotchStateMachine()
+        m.apply(.approvalPeekAvailable(true))
+
+        XCTAssertTrue(m.apply(.clicked))
+        XCTAssertEqual(m.presentation, .expanded)
+    }
+
+    func testExplicitUtilitiesExpandWorksFromPeek() {
+        var m = NotchStateMachine()
+        m.apply(.approvalPeekAvailable(true))
+
+        XCTAssertTrue(m.apply(.requestExpand(.utilities)))
+        XCTAssertEqual(m.presentation, .expanded)
+        XCTAssertEqual(m.face, .utilities)
+    }
+
+    func testExplicitAgentsExpandWorksFromPeek() {
+        var m = NotchStateMachine()
+        m.apply(.approvalPeekAvailable(true))
+
+        XCTAssertTrue(m.apply(.requestExpand(.agents)))
+        XCTAssertEqual(m.presentation, .expanded)
+        XCTAssertEqual(m.face, .agents)
     }
 
     func testClearingFinalApprovalReturnsPeekToCompact() {
@@ -282,6 +309,29 @@ final class NotchStateMachineTests: XCTestCase {
         XCTAssertNil(store.session(id: session.id)?.approval?.decidedAllow)
     }
 
+    @MainActor
+    func testExpandPeekOpensUtilitiesWithoutMutatingApproval() {
+        let settings = SettingsStore.inMemory()
+        settings.settings.autoOpenOnApproval = true
+        let appState = AppState(settings: settings)
+        let store = AgentSessionStore(fileName: "peek-utilities-\(UUID()).json")
+        let coordinator = ApprovalPeekCoordinator(
+            store: store,
+            appState: appState,
+            settings: settings
+        )
+        let session = Self.sessionWithApproval()
+        let deadline = session.approval?.actionDeadline
+        store.upsert(session)
+
+        coordinator.openExpanded(face: .utilities)
+
+        XCTAssertEqual(appState.presentation, .expanded)
+        XCTAssertEqual(appState.face, .utilities)
+        XCTAssertEqual(store.session(id: session.id)?.approval?.actionDeadline, deadline)
+        XCTAssertNil(store.session(id: session.id)?.approval?.decidedAllow)
+    }
+
     private static func sessionWithApproval() -> AgentSession {
         let now = Date()
         return AgentSession(
@@ -302,6 +352,214 @@ final class NotchStateMachineTests: XCTestCase {
                 rawEventName: "PermissionRequest",
                 toolName: "Bash",
                 summary: "make test",
+                receivedAt: now,
+                expiresAt: now.addingTimeInterval(60),
+                state: .pending,
+                handlingMode: .notchWithTerminalFallback,
+                fallbackDeadline: now.addingTimeInterval(60),
+                nativePromptExpected: true
+            )
+        )
+    }
+}
+
+@MainActor
+final class PeekNavigationRegressionTests: XCTestCase {
+    private var coordinators: [NotchInteractionCoordinator] = []
+
+    override func tearDown() {
+        coordinators.forEach { $0.stop() }
+        coordinators.removeAll()
+        super.tearDown()
+    }
+
+    func testHoverFromPeekOpensExpandedWhenPreferenceEnabled() async {
+        let context = makeContext(hoverToOpen: true)
+        context.settings.settings.openDelay = 0
+        context.store.upsert(Self.sessionWithApproval())
+        XCTAssertEqual(context.appState.presentation, .peeking)
+        context.interaction.start()
+        let expanded = expectation(description: "hover opens Peek into Expanded")
+        let observation = context.appState.$presentation
+            .filter { $0 == .expanded }
+            .prefix(1)
+            .sink { _ in expanded.fulfill() }
+
+        let pointer = NSEvent.mouseLocation
+        context.tracker.updateRects(
+            compact: CGRect(x: pointer.x - 10, y: pointer.y - 10, width: 20, height: 20),
+            expanded: .zero,
+            interactive: CGRect(x: pointer.x - 10, y: pointer.y - 10, width: 20, height: 20)
+        )
+        await fulfillment(of: [expanded], timeout: 1)
+        withExtendedLifetime(observation) {}
+
+        XCTAssertEqual(context.appState.presentation, .expanded)
+    }
+
+    func testPeekContentClickRequestOpensExpanded() {
+        let context = makeContext()
+        context.store.upsert(Self.sessionWithApproval())
+        XCTAssertEqual(context.appState.presentation, .peeking)
+
+        context.peek.openExpanded(face: .agents)
+
+        XCTAssertEqual(context.appState.presentation, .expanded)
+        XCTAssertEqual(context.appState.face, .agents)
+    }
+
+    func testPreparingSettingsSuspendsPeekWithoutMutatingTransaction() {
+        let context = makeContext()
+        let session = Self.sessionWithApproval()
+        let deadline = session.approval?.actionDeadline
+        context.store.upsert(session)
+
+        context.interaction.prepareForSecondaryWindow()
+
+        XCTAssertTrue(context.appState.isSecondaryWindowOpen)
+        XCTAssertEqual(context.appState.presentation, .compact)
+        XCTAssertEqual(context.store.session(id: session.id)?.approval?.requestID, "settings-transaction")
+        XCTAssertEqual(context.store.session(id: session.id)?.approval?.actionDeadline, deadline)
+        XCTAssertNil(context.store.session(id: session.id)?.approval?.decidedAllow)
+    }
+
+    func testClosingSettingsRestoresPeekWhenTransactionRemainsPending() {
+        let context = makeContext()
+        context.store.upsert(Self.sessionWithApproval())
+        context.interaction.prepareForSecondaryWindow()
+
+        context.interaction.secondaryWindowDidClose()
+
+        XCTAssertFalse(context.appState.isSecondaryWindowOpen)
+        XCTAssertEqual(context.appState.presentation, .peeking)
+    }
+
+    func testClosingSettingsRestoresCompactWhenTransactionResolved() {
+        let context = makeContext()
+        let session = Self.sessionWithApproval()
+        context.store.upsert(session)
+        context.interaction.prepareForSecondaryWindow()
+        context.store.update(id: session.id) {
+            $0.approval = nil
+            $0.requiresAttention = false
+        }
+
+        context.interaction.secondaryWindowDidClose()
+
+        XCTAssertFalse(context.appState.isSecondaryWindowOpen)
+        XCTAssertEqual(context.appState.presentation, .compact)
+    }
+
+    func testDismissedPeekDoesNotBlockUtilitiesOrSettings() {
+        let context = makeContext()
+        let session = Self.sessionWithApproval()
+        context.store.upsert(session)
+        context.peek.dismissCurrentPeek()
+
+        context.appState.expand(face: .utilities)
+        XCTAssertEqual(context.appState.presentation, .expanded)
+        XCTAssertEqual(context.appState.face, .utilities)
+        context.interaction.prepareForSecondaryWindow()
+
+        XCTAssertTrue(context.appState.isSecondaryWindowOpen)
+        XCTAssertEqual(context.appState.presentation, .compact)
+        XCTAssertEqual(context.store.session(id: session.id)?.approval?.requestID, "settings-transaction")
+        XCTAssertNil(context.store.session(id: session.id)?.approval?.decidedAllow)
+    }
+
+    func testNavigationNeverEmitsApprovalDecision() {
+        let context = makeContext()
+        let session = Self.sessionWithApproval()
+        context.store.upsert(session)
+
+        context.appState.expand(face: .utilities)
+        context.interaction.prepareForSecondaryWindow()
+        context.interaction.secondaryWindowDidClose()
+        context.appState.expand(face: .agents)
+
+        XCTAssertEqual(context.store.session(id: session.id)?.approval?.requestID, "settings-transaction")
+        XCTAssertNil(context.store.session(id: session.id)?.approval?.decidedAllow)
+    }
+
+    func testCompactClickWithoutApprovalRemainsUnchanged() {
+        let context = makeContext()
+        context.interaction.start()
+        let pointer = NSEvent.mouseLocation
+        context.tracker.updateRects(
+            compact: CGRect(x: pointer.x - 10, y: pointer.y - 10, width: 20, height: 20),
+            expanded: .zero,
+            interactive: CGRect(x: pointer.x - 10, y: pointer.y - 10, width: 20, height: 20)
+        )
+        let event = NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 2,
+            clickCount: 1,
+            pressure: 1
+        )!
+
+        NSApp.sendEvent(event)
+
+        XCTAssertEqual(context.appState.presentation, .expanded)
+        XCTAssertEqual(context.appState.face, .utilities)
+    }
+
+    private func makeContext(
+        hoverToOpen: Bool = false
+    ) -> (
+        settings: SettingsStore,
+        appState: AppState,
+        store: AgentSessionStore,
+        peek: ApprovalPeekCoordinator,
+        tracker: PointerTrackingService,
+        interaction: NotchInteractionCoordinator
+    ) {
+        let settings = SettingsStore.inMemory()
+        settings.settings.autoOpenOnApproval = true
+        settings.settings.hoverToOpen = hoverToOpen
+        let appState = AppState(settings: settings)
+        let store = AgentSessionStore(fileName: "peek-navigation-\(UUID()).json")
+        let peek = ApprovalPeekCoordinator(
+            store: store,
+            appState: appState,
+            settings: settings
+        )
+        let tracker = PointerTrackingService()
+        let interaction = NotchInteractionCoordinator(
+            appState: appState,
+            settings: settings,
+            tracker: tracker,
+            diagnostics: NotchDiagnostics(),
+            approvalPeek: peek
+        )
+        coordinators.append(interaction)
+        return (settings, appState, store, peek, tracker, interaction)
+    }
+
+    private static func sessionWithApproval() -> AgentSession {
+        let now = Date()
+        return AgentSession(
+            provider: .codex,
+            title: "Settings project",
+            projectPath: "/tmp/settings-project",
+            status: .waitingForApproval,
+            requiresAttention: true,
+            isManaged: false,
+            isBridgeConnected: true,
+            pendingApprovalRequestID: "settings-transaction",
+            approval: PendingApproval(
+                provider: .codex,
+                sessionID: "provider-session",
+                requestID: "settings-transaction",
+                toolUseID: nil,
+                turnID: "turn",
+                rawEventName: "PermissionRequest",
+                toolName: "Bash",
+                summary: "printf safe",
                 receivedAt: now,
                 expiresAt: now.addingTimeInterval(60),
                 state: .pending,

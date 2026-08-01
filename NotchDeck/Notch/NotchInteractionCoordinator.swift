@@ -11,6 +11,7 @@ final class NotchInteractionCoordinator {
     private let settings: SettingsStore
     private let tracker: PointerTrackingService
     private let diagnostics: NotchDiagnostics
+    private let approvalPeek: ApprovalPeekCoordinator
 
     private var localMonitor: Any?
     private var cancellables = Set<AnyCancellable>()
@@ -23,11 +24,13 @@ final class NotchInteractionCoordinator {
     private var suspendReopen = false
 
     init(appState: AppState, settings: SettingsStore,
-         tracker: PointerTrackingService, diagnostics: NotchDiagnostics) {
+         tracker: PointerTrackingService, diagnostics: NotchDiagnostics,
+         approvalPeek: ApprovalPeekCoordinator) {
         self.appState = appState
         self.settings = settings
         self.tracker = tracker
         self.diagnostics = diagnostics
+        self.approvalPeek = approvalPeek
     }
 
     func start() {
@@ -57,6 +60,7 @@ final class NotchInteractionCoordinator {
         suspendReopen = true
         appState.isSecondaryWindowOpen = true
         appState.setPinnedByUser(false, reason: "secondary window opened")
+        approvalPeek.suspendForSecondaryWindow()
         appState.compact()
         diagnostics.noteClose("secondary window opened")
     }
@@ -64,6 +68,7 @@ final class NotchInteractionCoordinator {
     /// Called when a secondary window closes.
     func secondaryWindowDidClose() {
         appState.isSecondaryWindowOpen = false
+        approvalPeek.resumeAfterSecondaryWindow()
     }
 
     // MARK: Snapshot handling
@@ -81,7 +86,7 @@ final class NotchInteractionCoordinator {
             // Inside the notch or expanded panel: never close.
             if closeTask != nil { closeTask?.cancel(); closeTask = nil }
             guard settings.settings.hoverToOpen, !suspendReopen else { return }
-            if appState.presentation == .compact {
+            if canOpenFromHover {
                 scheduleOpen(reason: "hover-enter")
             }
         } else {
@@ -135,7 +140,7 @@ final class NotchInteractionCoordinator {
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled, let self else { return }
             guard self.tracker.snapshot.insideAny, !self.suspendReopen,
-                  self.appState.presentation == .compact else { return }
+                  self.canOpenFromHover else { return }
             self.appState.expand()
             self.diagnostics.noteOpen(reason)
         }
@@ -152,5 +157,9 @@ final class NotchInteractionCoordinator {
             self.appState.compact()
             self.diagnostics.noteClose(reason)
         }
+    }
+
+    private var canOpenFromHover: Bool {
+        appState.presentation == .compact || appState.presentation == .peeking
     }
 }
