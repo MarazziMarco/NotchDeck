@@ -492,6 +492,29 @@ enum ApprovalAvailability: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// How long the non-actionable "Respond in Terminal" Peek remains visible
+/// after the transaction's existing absolute deadline. This controls only the
+/// presentation projection; it never changes, resolves or removes a request.
+enum PeekTerminalPendingVisibility: String, Codable, CaseIterable, Identifiable {
+    case s0, s3, s5, s10
+
+    var id: String { rawValue }
+    static let `default`: PeekTerminalPendingVisibility = .s5
+
+    var seconds: TimeInterval {
+        switch self {
+        case .s0: return 0
+        case .s3: return 3
+        case .s5: return 5
+        case .s10: return 10
+        }
+    }
+
+    var label: String {
+        seconds == 0 ? "Hide immediately" : "\(Int(seconds)) seconds"
+    }
+}
+
 // MARK: - Approval classification & pending model
 
 /// Classifies incoming bridge events strictly: only a genuine PermissionRequest
@@ -665,6 +688,56 @@ enum ApprovalPeekQueue {
              .helperExited, .deliveryFailed, .fellBack, .expired:
             return true
         case .delivered, .cancelled, .answered:
+            return false
+        }
+    }
+}
+
+/// Removes old terminal-pending items from the visual Peek projection after a
+/// bounded grace period. The source snapshot and its authoritative transactions
+/// remain untouched, so a later Terminal decision can still reconcile safely.
+enum ApprovalPeekVisibility {
+    static func filtered(
+        _ snapshot: ApprovalPeekQueueSnapshot,
+        now: Date,
+        terminalPendingGrace: TimeInterval
+    ) -> ApprovalPeekQueueSnapshot {
+        ApprovalPeekQueueSnapshot(items: snapshot.items.filter {
+            !shouldHide($0, now: now, grace: terminalPendingGrace)
+        })
+    }
+
+    static func nextHideDate(
+        in snapshot: ApprovalPeekQueueSnapshot,
+        after now: Date,
+        terminalPendingGrace: TimeInterval
+    ) -> Date? {
+        snapshot.items.compactMap { item -> Date? in
+            guard isTerminalPending(item.approval) else { return nil }
+            let date = item.approval.actionDeadline.addingTimeInterval(
+                max(0, terminalPendingGrace)
+            )
+            return date > now ? date : nil
+        }.min()
+    }
+
+    private static func shouldHide(
+        _ item: ApprovalPeekItem,
+        now: Date,
+        grace: TimeInterval
+    ) -> Bool {
+        guard isTerminalPending(item.approval),
+              !item.isLocallyActionable(at: now) else { return false }
+        return now >= item.approval.actionDeadline.addingTimeInterval(max(0, grace))
+    }
+
+    private static func isTerminalPending(_ approval: PendingApproval) -> Bool {
+        guard approval.nativePromptExpected else { return false }
+        switch approval.state {
+        case .pending, .deliveryFailed, .fellBack, .expired:
+            return true
+        case .sending, .sent, .providerOutputClosed, .helperTerminated,
+             .delivered, .cancelled, .answered, .helperExited:
             return false
         }
     }

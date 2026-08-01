@@ -402,6 +402,72 @@ final class AgentPermissionAdapterTests: XCTestCase {
         XCTAssertNil(resolved.queuedApprovals)
     }
 
+    func testTerminalPostToolUseClearsSingleMatchingPendingApprovalBeforeExpiry() {
+        let id = UUID()
+        let pending = TerminalAgentBridge.reduce(
+            existing: nil,
+            id: id,
+            event: TerminalAgentEvent(
+                type: .permissionRequested,
+                provider: .claudeCode,
+                sessionID: "s",
+                timestamp: 1,
+                toolName: "Bash",
+                requestID: "native",
+                transactionID: "transaction"
+            )
+        )
+
+        let resolved = TerminalAgentBridge.reduce(
+            existing: pending,
+            id: id,
+            event: TerminalAgentEvent(
+                type: .toolCompleted,
+                provider: .claudeCode,
+                sessionID: "s",
+                timestamp: 2,
+                toolName: "Bash",
+                toolUseID: "provider-tool-use"
+            )
+        )
+
+        XCTAssertNil(resolved.approval)
+        XCTAssertNil(resolved.pendingApprovalRequestID)
+        XCTAssertFalse(resolved.requiresAttention)
+    }
+
+    func testTerminalPostToolUseForDifferentToolDoesNotClearPendingApproval() {
+        let id = UUID()
+        let pending = TerminalAgentBridge.reduce(
+            existing: nil,
+            id: id,
+            event: TerminalAgentEvent(
+                type: .permissionRequested,
+                provider: .claudeCode,
+                sessionID: "s",
+                timestamp: 1,
+                toolName: "Bash",
+                requestID: "native",
+                transactionID: "transaction"
+            )
+        )
+
+        let unchanged = TerminalAgentBridge.reduce(
+            existing: pending,
+            id: id,
+            event: TerminalAgentEvent(
+                type: .toolCompleted,
+                provider: .claudeCode,
+                sessionID: "s",
+                timestamp: 2,
+                toolName: "Write"
+            )
+        )
+
+        XCTAssertEqual(unchanged.approval?.requestID, "transaction")
+        XCTAssertTrue(unchanged.requiresAttention)
+    }
+
     func testTerminalResolutionRemovesMatchingQueuedPeekTransaction() {
         let id = UUID()
         let firstEvent = TerminalAgentEvent(

@@ -216,25 +216,39 @@ final class ApprovalPeekCoordinator: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var suppressedTransactionIDs = Set<String>()
     private var isAutoPresentationEnabled = true
+    private var unfilteredSnapshot = ApprovalPeekQueueSnapshot(items: [])
+    private var terminalPendingGrace = PeekTerminalPendingVisibility.default.seconds
+    private var terminalPendingHideTask: Task<Void, Never>?
 
     init(store: AgentSessionStore, appState: AppState, settings: SettingsStore) {
         self.appState = appState
 
-        let enabled = settings.$settings
-            .map { AgentsModule.isEnabled($0) && $0.autoOpenOnApproval }
-            .removeDuplicates()
+        let configuration = settings.$settings
+            .map {
+                (
+                    enabled: AgentsModule.isEnabled($0) && $0.autoOpenOnApproval,
+                    terminalPendingGrace: $0.peekTerminalPendingVisibility.seconds
+                )
+            }
+            .removeDuplicates {
+                $0.enabled == $1.enabled
+                    && $0.terminalPendingGrace == $1.terminalPendingGrace
+            }
 
         store.$sessions
-            .combineLatest(enabled)
-            .sink { [weak self] sessions, isEnabled in
+            .combineLatest(configuration)
+            .sink { [weak self] sessions, configuration in
                 guard let self else { return }
-                let next = ApprovalPeekQueue.resolve(sessions: sessions)
-                self.isAutoPresentationEnabled = isEnabled
-                self.snapshot = next
-                self.reconcileSuppression(with: next)
-                self.appState?.handle(.approvalPeekAvailable(self.shouldPresentPeek))
+                self.isAutoPresentationEnabled = configuration.enabled
+                self.terminalPendingGrace = configuration.terminalPendingGrace
+                self.unfilteredSnapshot = ApprovalPeekQueue.resolve(sessions: sessions)
+                self.refreshPresentation(at: Date())
             }
             .store(in: &cancellables)
+    }
+
+    deinit {
+        terminalPendingHideTask?.cancel()
     }
 
     func setHovering(_ hovering: Bool) {
@@ -285,6 +299,41 @@ final class ApprovalPeekCoordinator: ObservableObject {
     private var shouldPresentPeek: Bool {
         isAutoPresentationEnabled && snapshot.visible != nil
             && !isSuppressed && !isPresentationSuspended
+    }
+
+    private func refreshPresentation(at now: Date) {
+        let next = ApprovalPeekVisibility.filtered(
+            unfilteredSnapshot,
+            now: now,
+            terminalPendingGrace: terminalPendingGrace
+        )
+        snapshot = next
+        reconcileSuppression(with: next)
+        appState?.handle(.approvalPeekAvailable(shouldPresentPeek))
+        scheduleTerminalPendingHide(after: now)
+    }
+
+    private func scheduleTerminalPendingHide(after now: Date) {
+        terminalPendingHideTask?.cancel()
+        guard let hideDate = ApprovalPeekVisibility.nextHideDate(
+            in: unfilteredSnapshot,
+            after: now,
+            terminalPendingGrace: terminalPendingGrace
+        ) else {
+            terminalPendingHideTask = nil
+            return
+        }
+        let nanoseconds = UInt64(
+            max(0, hideDate.timeIntervalSince(now)) * 1_000_000_000
+        )
+        terminalPendingHideTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: nanoseconds)
+            } catch {
+                return
+            }
+            self?.refreshPresentation(at: Date())
+        }
     }
 
     private func reconcileSuppression(with next: ApprovalPeekQueueSnapshot) {

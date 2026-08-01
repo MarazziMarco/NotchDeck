@@ -26,6 +26,13 @@ struct AgentsSettingsView: View {
                 .accessibilityHint(Text("How long an approval remains actionable in NotchDeck. The same request may also be answered in Terminal."))
                 Text("How long an approval remains actionable in NotchDeck. The same request may also be answered in Terminal.")
                     .font(.caption).foregroundStyle(.secondary)
+                Picker("Keep terminal-only status visible", selection: $settings.settings.peekTerminalPendingVisibility) {
+                    ForEach(PeekTerminalPendingVisibility.allCases) { Text($0.label).tag($0) }
+                }
+                .accessibilityLabel(Text("Terminal-only Peek visibility"))
+                .accessibilityHint(Text("How long the non-actionable Respond in Terminal strip remains visible after local expiry."))
+                Text("After local expiry, Peek becomes non-actionable, remains briefly visible, then hides without resolving the Terminal request.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Text("NotchDeck answers a permission request; the same request is also answerable in the native terminal prompt. It never simulates keystrokes and never auto-approves.")
                 .font(.caption).foregroundStyle(.secondary)

@@ -651,6 +651,14 @@ actor TerminalAgentBridge {
                 Self.providerProgressMatches($0, event: event)
             }?.requestID
             : nil
+        // Claude's PermissionRequest payload does not reliably expose the later
+        // PostToolUse `tool_use_id`. When exactly one request exists, a same-tool
+        // PostToolUse in the same provider session is nevertheless authoritative
+        // proof that this request was resolved (including a direct Terminal
+        // response). Never apply this fallback while another request is queued.
+        let resolvesSingleMatchingTool = event.type == .toolCompleted
+            && (s.queuedApprovals?.isEmpty ?? true)
+            && s.approval.map { Self.toolNameMatches($0, event: event) } == true
         // After an explicit native fallback, a session-correlated PostToolUse
         // may lack the PermissionRequest's tool identity (notably in Claude).
         // It may clear one unambiguous fallback card, but never claims that a
@@ -678,7 +686,8 @@ actor TerminalAgentBridge {
             s.queuedApprovals = nil
             s.pendingApprovalRequestID = nil
             s.requiresAttention = false
-        } else if matchingProgress || resolvesUnambiguousFallback {
+        } else if matchingProgress || resolvesSingleMatchingTool
+                    || resolvesUnambiguousFallback {
             Self.finishCurrentTransaction(&s)
         } else if let matchingQueuedRequestID {
             var queued = s.queuedApprovals ?? []
@@ -857,6 +866,14 @@ actor TerminalAgentBridge {
             return turnID == eventTurnID
         }
         return false
+    }
+
+    private static func toolNameMatches(_ approval: PendingApproval,
+                                        event: TerminalAgentEvent) -> Bool {
+        guard let approvalTool = approval.toolName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let eventTool = event.toolName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !approvalTool.isEmpty, !eventTool.isEmpty else { return false }
+        return approvalTool.caseInsensitiveCompare(eventTool) == .orderedSame
     }
 
     private static func finishCurrentTransaction(_ s: inout AgentSession) {
