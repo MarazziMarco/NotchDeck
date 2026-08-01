@@ -99,6 +99,7 @@ struct ApprovalPeekView: View {
         }
         .onDisappear {
             peek.setHovering(false)
+            peek.setHoveringInteractiveControls(false)
         }
     }
 
@@ -230,6 +231,9 @@ struct ApprovalPeekView: View {
             }
         }
         .fixedSize()
+        .onHover { hovering in
+            peek.setHoveringInteractiveControls(hovering)
+        }
     }
 
     private func peekIconButton(
@@ -292,6 +296,9 @@ struct ApprovalPeekView: View {
                         "\(presentation.expiredStatus); approval is no longer actionable in NotchDeck"
                     )
             }
+        }
+        .onHover { hovering in
+            peek.setHoveringInteractiveControls(hovering)
         }
         .font(.system(size: 10, weight: .semibold))
         .fixedSize(horizontal: true, vertical: false)

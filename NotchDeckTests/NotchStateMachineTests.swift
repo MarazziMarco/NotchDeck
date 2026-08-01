@@ -397,6 +397,25 @@ final class PeekNavigationRegressionTests: XCTestCase {
         XCTAssertEqual(context.appState.presentation, .expanded)
     }
 
+    func testHoverOverPeekControlsDoesNotReplaceThemWithUtilities() async {
+        let context = makeContext(hoverToOpen: true)
+        context.settings.settings.openDelay = 0
+        context.store.upsert(Self.sessionWithApproval())
+        context.peek.setHoveringInteractiveControls(true)
+        context.interaction.start()
+
+        let pointer = NSEvent.mouseLocation
+        context.tracker.updateRects(
+            compact: CGRect(x: pointer.x - 10, y: pointer.y - 10, width: 20, height: 20),
+            expanded: .zero,
+            interactive: CGRect(x: pointer.x - 10, y: pointer.y - 10, width: 20, height: 20)
+        )
+        await Task.yield()
+        await Task.yield()
+
+        XCTAssertEqual(context.appState.presentation, .peeking)
+    }
+
     func testPeekContentClickRequestOpensExpanded() {
         let context = makeContext()
         context.store.upsert(Self.sessionWithApproval())

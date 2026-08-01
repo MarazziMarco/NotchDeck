@@ -202,6 +202,7 @@ final class AgentSessionStore: ObservableObject, LiveActivitySource {
 final class ApprovalPeekCoordinator: ObservableObject {
     @Published private(set) var snapshot = ApprovalPeekQueueSnapshot(items: [])
     @Published private(set) var isHovering = false
+    @Published private(set) var isHoveringInteractiveControls = false
     /// Presentation-only suppression requested by the strip's close control.
     /// The authoritative transactions, deadlines and Terminal surface remain
     /// untouched.
@@ -241,6 +242,11 @@ final class ApprovalPeekCoordinator: ObservableObject {
         isHovering = hovering
     }
 
+    func setHoveringInteractiveControls(_ hovering: Bool) {
+        guard hovering != isHoveringInteractiveControls else { return }
+        isHoveringInteractiveControls = hovering
+    }
+
     /// Hide the current strip completely without deciding, cancelling or
     /// changing the deadline of any approval. Existing transactions stay
     /// suppressed as a set; the arrival of a genuinely new transaction reopens
@@ -257,6 +263,7 @@ final class ApprovalPeekCoordinator: ObservableObject {
         guard !isPresentationSuspended else { return }
         isPresentationSuspended = true
         setHovering(false)
+        setHoveringInteractiveControls(false)
         appState?.handle(.approvalPeekAvailable(false))
     }
 

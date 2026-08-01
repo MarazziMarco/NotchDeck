@@ -39,6 +39,15 @@ final class NotchInteractionCoordinator {
             .sink { [weak self] snap in self?.handle(snap) }
             .store(in: &cancellables)
 
+        approvalPeek.$isHoveringInteractiveControls
+            .removeDuplicates()
+            .sink { [weak self] isHoveringControls in
+                guard isHoveringControls else { return }
+                self?.openTask?.cancel()
+                self?.openTask = nil
+            }
+            .store(in: &cancellables)
+
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) {
             [weak self] event in self?.handleLocal(event) ?? event
         }
@@ -160,6 +169,13 @@ final class NotchInteractionCoordinator {
     }
 
     private var canOpenFromHover: Bool {
-        appState.presentation == .compact || appState.presentation == .peeking
+        switch appState.presentation {
+        case .compact:
+            return true
+        case .peeking:
+            return !approvalPeek.isHoveringInteractiveControls
+        case .expanded:
+            return false
+        }
     }
 }
