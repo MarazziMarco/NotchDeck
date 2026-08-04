@@ -249,11 +249,12 @@ final class NotchPanelController {
         let compactActivity = !live.isEmpty
         let isFocus = live.isFocusTimer && metrics.hasNotch
         let isAgent = live.compactAgentIndicator != nil && metrics.hasNotch
+        // Both wings are reserved whenever the Agents indicator shows, even with a
+        // single provider. This keeps the capsule symmetric so both bottom corners
+        // round and the lone logo is never clipped by an off-centre corner radius.
         let agentWings = (
-            left: live.leading?.providerVendor == .claudeCode
-                ? CompactAgentIndicatorGeometry.wingWidth : 0,
-            right: live.trailing?.providerVendor == .codex
-                ? CompactAgentIndicatorGeometry.wingWidth : 0
+            left: CompactAgentIndicatorGeometry.wingWidth,
+            right: CompactAgentIndicatorGeometry.wingWidth
         )
         let compactWings: (left: CGFloat, right: CGFloat)? = isFocus
             ? (CompactFocusGeometry.leftWingWidth, CompactFocusGeometry.rightWingWidth)
@@ -329,10 +330,9 @@ final class NotchPanelController {
         let focus = isCompactFocus(metrics)
         let live = effectiveCompactLayout
         let agent = live.compactAgentIndicator != nil && metrics.hasNotch
-        let leftAgentWing = live.leading?.providerVendor == .claudeCode
-            ? CompactAgentIndicatorGeometry.wingWidth : 0
-        let rightAgentWing = live.trailing?.providerVendor == .codex
-            ? CompactAgentIndicatorGeometry.wingWidth : 0
+        // Symmetric wings (see reposition): a single provider still reserves both.
+        let leftAgentWing = agent ? CompactAgentIndicatorGeometry.wingWidth : 0
+        let rightAgentWing = agent ? CompactAgentIndicatorGeometry.wingWidth : 0
         let cWidth = focus
             ? metrics.notchWidth + CompactFocusGeometry.totalExtraWidth
             : agent
@@ -382,10 +382,9 @@ final class NotchPanelController {
         let idle = live.isEmpty && !environment.appState.isExpanded
         let focus = isCompactFocus(metrics)
         let agent = live.compactAgentIndicator != nil && metrics.hasNotch
-        let agentLeft = live.leading?.providerVendor == .claudeCode
-            ? CompactAgentIndicatorGeometry.wingWidth : 0
-        let agentRight = live.trailing?.providerVendor == .codex
-            ? CompactAgentIndicatorGeometry.wingWidth : 0
+        // Symmetric wings (see reposition): a single provider still reserves both.
+        let agentLeft = agent ? CompactAgentIndicatorGeometry.wingWidth : 0
+        let agentRight = agent ? CompactAgentIndicatorGeometry.wingWidth : 0
         info.hasNotch = metrics.hasNotch
         info.physicalNotchHeight = metrics.notchHeight
         info.physicalIdle = idle
