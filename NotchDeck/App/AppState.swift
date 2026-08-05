@@ -82,6 +82,21 @@ final class AppState: ObservableObject {
             .removeDuplicates()
             .sink { [weak self] enabled in self?.applyFacekeyEnabled(enabled) }
             .store(in: &cancellables)
+
+        // FaceKey running-state drives the workspace too, so launching or
+        // quitting FaceKey adds or removes the workspace live.
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        Publishers.Merge(
+            workspaceCenter.publisher(for: NSWorkspace.didLaunchApplicationNotification),
+            workspaceCenter.publisher(for: NSWorkspace.didTerminateApplicationNotification)
+        )
+        .receive(on: RunLoop.main)
+        .sink { [weak self] _ in self?.refreshFacekeyWorkspace() }
+        .store(in: &cancellables)
+    }
+
+    private func refreshFacekeyWorkspace() {
+        applyFacekeyEnabled(FaceKeyModule.isEnabled(settings.settings))
     }
 
     /// The face to show given which workspaces are available; unavailable

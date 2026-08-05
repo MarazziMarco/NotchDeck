@@ -22,14 +22,14 @@ final class FaceKeyModuleTests: XCTestCase {
         XCTAssertEqual(FaceKeyModule.Action.allCases.count, 4)
     }
 
-    func testInstallationTargetsTheFaceKeyBundleIdentifier() {
-        XCTAssertEqual(FaceKeyInstallation.bundleIdentifier, "com.marazzimarco.FaceKey")
+    func testPresenceTargetsTheFaceKeyBundleIdentifier() {
+        XCTAssertEqual(FaceKeyPresence.bundleIdentifier, "com.marazzimarco.FaceKey")
     }
 
-    func testWorkspaceIsHiddenWhenFaceKeyAppIsNotInstalled() {
-        // On a machine without FaceKey installed, the workspace stays off even
-        // though the toggle defaults to enabled.
-        if !FaceKeyInstallation.isInstalled {
+    func testWorkspaceIsHiddenWhenFaceKeyAppIsNotRunning() {
+        // While FaceKey is not running, the workspace stays off even though the
+        // toggle defaults to enabled — so quitting FaceKey removes it.
+        if !FaceKeyPresence.isRunning {
             var settings = AppSettings()
             settings.moduleEnabled[FaceKeyModule.identifier] = true
             XCTAssertFalse(FaceKeyModule.isEnabled(settings))

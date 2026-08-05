@@ -22,11 +22,12 @@ enum FaceKeyModule {
         capabilities: [],
         hasSettings: true)
 
-    /// Enabled only when the toggle is on AND the FaceKey app is installed, so the
-    /// workspace never appears without both products present.
+    /// Enabled only when the toggle is on AND the FaceKey app is currently
+    /// running, so the workspace appears while FaceKey runs and disappears the
+    /// moment it quits.
     static func isEnabled(_ settings: AppSettings) -> Bool {
         ModuleEnablement.isEnabled(identifier, defaultEnabled: descriptor.defaultEnabled, settings: settings)
-            && FaceKeyInstallation.isInstalled
+            && FaceKeyPresence.isRunning
     }
 
     /// The FaceKey deep links this workspace can open. Pure and testable.
@@ -58,12 +59,13 @@ enum FaceKeyModule {
     }
 }
 
-/// Detects whether the separate FaceKey application is installed.
-enum FaceKeyInstallation {
+/// Detects whether the separate FaceKey application is currently running.
+enum FaceKeyPresence {
     static let bundleIdentifier = "com.marazzimarco.FaceKey"
 
-    static var isInstalled: Bool {
-        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) != nil
+    static var isRunning: Bool {
+        NSWorkspace.shared.runningApplications
+            .contains { $0.bundleIdentifier == bundleIdentifier }
     }
 }
 
