@@ -113,7 +113,6 @@ final class AppEnvironment: ObservableObject {
         self.liveActivity = LiveActivityCoordinator()
         let community = CommunityModuleRegistry()
         _ = try? community.register(SystemPulseModule.self)
-        _ = try? community.register(FaceKeyModule.self)
         self.community = community
 
         self.agentsWorkspace = AgentsWorkspaceController(

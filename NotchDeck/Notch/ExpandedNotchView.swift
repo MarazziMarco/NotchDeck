@@ -34,10 +34,13 @@ struct ExpandedNotchView: View {
             // Agents module is enabled. When disabled it is removed entirely — no
             // capsule, no single "Utilities" label — and Utilities is the sole
             // root workspace.
-            if appState.agentsEnabled {
-                FaceSwitcher(selection: Binding(
-                    get: { appState.face },
-                    set: { appState.toggleFace(to: $0) }))
+            if appState.agentsEnabled || appState.facekeyWorkspaceEnabled {
+                FaceSwitcher(
+                    selection: Binding(
+                        get: { appState.face },
+                        set: { appState.toggleFace(to: $0) }),
+                    showAgents: appState.agentsEnabled,
+                    showFacekey: appState.facekeyWorkspaceEnabled)
             }
             Spacer()
             // The ONLY control that toggles the pin. Being a Button, it consumes
@@ -76,6 +79,7 @@ struct ExpandedNotchView: View {
             switch appState.face {
             case .utilities: UtilitiesFaceView()
             case .agents: AgentsFaceView()
+            case .facekey: FaceKeyWorkspaceView()
             }
         }
     }
@@ -95,8 +99,13 @@ struct ExpandedNotchView: View {
         DragGesture(minimumDistance: 30)
             .onEnded { value in
                 guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                if value.translation.width < -40 { appState.toggleFace(to: .agents) }
-                else if value.translation.width > 40 { appState.toggleFace(to: .utilities) }
+                let faces = appState.availableFaces
+                guard let index = faces.firstIndex(of: appState.face) else { return }
+                if value.translation.width < -40, index + 1 < faces.count {
+                    appState.toggleFace(to: faces[index + 1])
+                } else if value.translation.width > 40, index > 0 {
+                    appState.toggleFace(to: faces[index - 1])
+                }
             }
     }
 
@@ -123,12 +132,15 @@ struct ExpandedNotchView: View {
 /// Segmented Utilities / Agents switcher with a sliding highlight.
 struct FaceSwitcher: View {
     @Binding var selection: NotchFace
+    var showAgents: Bool = true
+    var showFacekey: Bool = false
     @Namespace private var ns
 
     var body: some View {
         HStack(spacing: 2) {
             segment(.utilities, "square.grid.2x2", "Utilities")
-            segment(.agents, "cpu", "Agents")
+            if showAgents { segment(.agents, "cpu", "Agents") }
+            if showFacekey { segment(.facekey, "person.crop.circle.badge.checkmark", "FaceKey") }
         }
         .padding(3)
         .background(Color.black.opacity(0.35), in: Capsule())

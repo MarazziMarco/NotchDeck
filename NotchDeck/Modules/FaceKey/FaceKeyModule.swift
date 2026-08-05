@@ -1,32 +1,35 @@
 import AppKit
 import SwiftUI
 
-/// A thin FaceKey presence inside NotchDeck. NotchDeck never handles the camera,
-/// keys, recognition, or file encryption — the separate, independently signed
-/// FaceKey app owns all of that. This module only shows concise entry points and
-/// opens the FaceKey app at the right destination through the `facekey://` URL
-/// scheme. Live sanitized progress inside NotchDeck is a later, IPC-gated step.
-struct FaceKeyModule: NotchDeckModule {
+/// FaceKey as a top-level NotchDeck workspace (shown beside Utilities and
+/// Agents) — but only when the separate FaceKey app is installed and the module
+/// is enabled. NotchDeck never handles the camera, keys, recognition, or file
+/// encryption; the workspace only opens the FaceKey app at the right screen
+/// through the `facekey://` URL scheme.
+enum FaceKeyModule {
+    static let identifier = "built-in.facekey"
+
     static let descriptor = ModuleDescriptor(
-        identifier: "built-in.facekey",
+        identifier: identifier,
         displayName: "FaceKey",
         summary: "Verify your face and protect files with the FaceKey app.",
         version: "1.0.0",
         author: "FaceKey",
         category: .system,
         iconSystemName: "person.crop.circle.badge.checkmark",
-        defaultEnabled: false,
-        surfaces: [.more, .expandedTab, .settingsSection],
+        defaultEnabled: true,
+        surfaces: [.workspace, .settingsSection],
         capabilities: [],
         hasSettings: true)
 
-    init() {}
+    /// Enabled only when the toggle is on AND the FaceKey app is installed, so the
+    /// workspace never appears without both products present.
+    static func isEnabled(_ settings: AppSettings) -> Bool {
+        ModuleEnablement.isEnabled(identifier, defaultEnabled: descriptor.defaultEnabled, settings: settings)
+            && FaceKeyInstallation.isInstalled
+    }
 
-    func moreCard(context: ModuleContext) -> AnyView? { AnyView(FaceKeyModuleCard()) }
-    func expandedView(context: ModuleContext) -> AnyView? { AnyView(FaceKeyModuleCard()) }
-    func settingsView(context: ModuleContext) -> AnyView? { AnyView(FaceKeyModuleSettings()) }
-
-    /// The FaceKey deep links this module can open. Pure and testable.
+    /// The FaceKey deep links this workspace can open. Pure and testable.
     enum Action: String, CaseIterable {
         case verify
         case protectFiles = "protect"
@@ -55,42 +58,67 @@ struct FaceKeyModule: NotchDeckModule {
     }
 }
 
-struct FaceKeyModuleCard: View {
+/// Detects whether the separate FaceKey application is installed.
+enum FaceKeyInstallation {
+    static let bundleIdentifier = "com.marazzimarco.FaceKey"
+
+    static var isInstalled: Bool {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) != nil
+    }
+}
+
+/// Opens FaceKey deep links. Isolated so views stay testable.
+enum FaceKeyLauncher {
+    static func open(_ action: FaceKeyModule.Action) {
+        guard let url = action.url else { return }
+        NSWorkspace.shared.open(url)
+    }
+}
+
+/// The FaceKey workspace surface (rendered by `ExpandedNotchView`).
+struct FaceKeyWorkspaceView: View {
     private let primaryActions: [FaceKeyModule.Action] = [.verify, .protectFiles, .openContainer]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "person.crop.circle.badge.checkmark")
-                    .accessibilityHidden(true)
-                Text("FaceKey")
-                    .font(.system(size: 12, weight: .semibold))
-                Spacer(minLength: 0)
-            }
+        VStack(alignment: .leading, spacing: 10) {
+            Text("FaceKey")
+                .font(.system(size: 13, weight: .semibold))
+            Text("Local face verification and an encrypted file vault, in the separate FaceKey app.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             ForEach(primaryActions, id: \.self) { action in
                 Button { FaceKeyLauncher.open(action) } label: {
                     Label(action.title, systemImage: action.systemImage)
-                        .font(.system(size: 11))
+                        .font(.system(size: 12))
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
+                        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(action.title)
             }
-            Divider().opacity(0.4)
-            Button { FaceKeyLauncher.open(.settings) } label: {
-                Label(FaceKeyModule.Action.settings.title, systemImage: "gearshape")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack {
+                Button { FaceKeyLauncher.open(.settings) } label: {
+                    Label(FaceKeyModule.Action.settings.title, systemImage: "gearshape")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(FaceKeyModule.Action.settings.title)
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(FaceKeyModule.Action.settings.title)
+
             Text("Opens the FaceKey app. NotchDeck never handles your camera, keys, or files.")
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
-        .padding(8)
+        .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
@@ -98,19 +126,11 @@ struct FaceKeyModuleCard: View {
 struct FaceKeyModuleSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("FaceKey runs as its own app. This module only opens FaceKey at the right screen; it never receives camera frames, face data, passwords, or keys.")
+            Text("FaceKey runs as its own app. This workspace only opens FaceKey at the right screen; it never receives camera frames, face data, passwords, or keys. It appears only when the FaceKey app is installed.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Button("Open FaceKey Settings") { FaceKeyLauncher.open(.settings) }
         }
-    }
-}
-
-/// Opens FaceKey deep links. Isolated so the module views stay testable.
-enum FaceKeyLauncher {
-    static func open(_ action: FaceKeyModule.Action) {
-        guard let url = action.url else { return }
-        NSWorkspace.shared.open(url)
     }
 }
