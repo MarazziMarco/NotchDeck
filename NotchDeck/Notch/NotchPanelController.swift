@@ -25,6 +25,8 @@ final class NotchPanelController {
     private var hostingView: PassthroughHostingView!
     private var cancellables = Set<AnyCancellable>()
     private var watchdog: Timer?
+    private var launchPadBridge: LaunchPadPresenceBridge?
+    private var isSuspendedForLaunchPad = false
 
     private var tracker: PointerTrackingService { environment.pointerTracker }
     private var diagnostics: NotchDiagnostics { environment.diagnostics }
@@ -59,6 +61,32 @@ final class NotchPanelController {
         reposition(animated: false)
         panel.orderFrontRegardless()
         startWatchdog()
+
+        // LaunchPad is a non-activating overlay other apps must step aside
+        // for while it's on screen (see docs/superpowers/specs/2026-10-11-
+        // app-integration-design.md §4). Suspended: collapse, order out, stop
+        // reacting to hot zones/pointer tracking/drag hover, pause the
+        // watchdog. Resumed: restore exactly as the sequence above does.
+        launchPadBridge = LaunchPadPresenceBridge { [weak self] suspended in
+            self?.setSuspendedForLaunchPad(suspended)
+        }
+    }
+
+    private func setSuspendedForLaunchPad(_ suspended: Bool) {
+        guard suspended != isSuspendedForLaunchPad else { return }
+        isSuspendedForLaunchPad = suspended
+        if suspended {
+            environment.appState.compact()
+            tracker.stop()
+            watchdog?.invalidate()
+            watchdog = nil
+            panel.orderOut(nil)
+        } else {
+            tracker.start()
+            reposition(animated: false)
+            panel.orderFrontRegardless()
+            startWatchdog()
+        }
     }
 
     private func observe() {
@@ -223,6 +251,10 @@ final class NotchPanelController {
     }
 
     func reposition(animated: Bool) {
+        // Stepping aside for LaunchPad (see init): ignore reposition triggers
+        // (hover, drag hover, layout changes) until resumed re-enters this
+        // normally via `setSuspendedForLaunchPad`.
+        guard !isSuspendedForLaunchPad else { return }
         guard let metrics = currentMetrics() else {
             Log.panel.error("No screen available to position notch panel")
             return
@@ -477,6 +509,7 @@ final class NotchPanelController {
     /// realign and collapse. An active Pomodoro is deliberately NOT a keep-open
     /// condition.
     private func checkStuckState() {
+        guard !isSuspendedForLaunchPad else { return }
         let state = environment.appState
         guard state.isExpanded else { return }
         guard !state.shouldStayOpen else { return }
