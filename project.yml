@@ -12,7 +12,8 @@ options:
 # docs/superpowers/specs/2026-10-11-app-integration-design.md §2/§4 in the
 # LaunchMe repo. Path is relative to this file and resolves as-is from the
 # main checkout (sibling "RadialMenu/app" under "Mac apps"). Building from a
-# git worktree under .worktrees/ needs an extra, untracked symlink — see
+# git worktree under .worktrees/ needs one untracked symlink so the same
+# relative path resolves there too — see "Building from a git worktree" in
 # CONTRIBUTING.md.
 packages:
   ActionKit:
@@ -96,8 +97,13 @@ targets:
     sources:
       - NotchDeckTests
     dependencies:
-      - package: ActionKit
-        product: ActionKit
+      # No direct ActionKit dependency: `@testable import NotchDeck` is
+      # enough since LaunchPadPresenceBridgeTests uses NotchDeck's own
+      # LaunchPadPresenceBridge.didShow/.didHide passthroughs instead of
+      # importing ActionKit directly. NotchDeckTests is a *hosted* bundle
+      # (launches NotchDeck.app); also linking ActionKit's package product
+      # here risks it being loaded twice in the same process (once via the
+      # host app, once via the test bundle) and duplicate-class warnings.
       - target: NotchDeck
     settings:
       base:

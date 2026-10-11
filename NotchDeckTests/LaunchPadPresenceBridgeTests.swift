@@ -1,12 +1,15 @@
 import XCTest
-import ActionKit
 @testable import NotchDeck
 
-/// Exercises `LaunchPadPresenceBridge`'s state handling using the same
-/// injectable-`NotificationCenter` seam ActionKit's own
-/// `LaunchPadPresenceObserver` tests use (see RadialMenu/app/Tests/
-/// ArcusCoreTests/LaunchPadPresenceTests.swift) — deterministic, in-process
-/// delivery instead of the real distributed bus.
+/// Exercises `LaunchPadPresenceBridge`'s state handling using injectable
+/// `NotificationCenter`s for both the distributed presence bus and the
+/// workspace termination hook — deterministic, in-process delivery instead
+/// of the real buses. Deliberately `@testable import NotchDeck` only (no
+/// `import ActionKit`): the bridge re-exports the two notification names it
+/// needs via `LaunchPadPresenceBridge.didShow`/`.didHide`, so NotchDeckTests
+/// doesn't need to link ActionKit directly (see project.yml — this test
+/// bundle is hosted inside NotchDeck.app, and linking the same SPM package
+/// product into both risks duplicate-class warnings).
 @MainActor
 final class LaunchPadPresenceBridgeTests: XCTestCase {
     func testShowSuspendsAndHideResumes() {
@@ -19,11 +22,11 @@ final class LaunchPadPresenceBridgeTests: XCTestCase {
             if suspended { suspendedExp.fulfill() } else { resumedExp.fulfill() }
         }
 
-        center.post(name: LaunchPadPresence.didShow, object: nil)
+        center.post(name: LaunchPadPresenceBridge.didShow, object: nil)
         wait(for: [suspendedExp], timeout: 2.0)
         XCTAssertTrue(bridge.isSuspended)
 
-        center.post(name: LaunchPadPresence.didHide, object: nil)
+        center.post(name: LaunchPadPresenceBridge.didHide, object: nil)
         wait(for: [resumedExp], timeout: 2.0)
         XCTAssertFalse(bridge.isSuspended)
 
@@ -42,9 +45,9 @@ final class LaunchPadPresenceBridgeTests: XCTestCase {
             if changeCount == 1 { firstChange.fulfill() } else { unwantedSecondChange.fulfill() }
         }
 
-        center.post(name: LaunchPadPresence.didShow, object: nil)
+        center.post(name: LaunchPadPresenceBridge.didShow, object: nil)
         wait(for: [firstChange], timeout: 2.0)
-        center.post(name: LaunchPadPresence.didShow, object: nil) // redundant: no 2nd callback expected
+        center.post(name: LaunchPadPresenceBridge.didShow, object: nil) // redundant: no 2nd callback expected
 
         wait(for: [unwantedSecondChange], timeout: 0.3)
         XCTAssertEqual(changeCount, 1)
@@ -52,26 +55,70 @@ final class LaunchPadPresenceBridgeTests: XCTestCase {
         bridge.invalidate()
     }
 
-    func testProviderTerminatedResumesEvenWithoutDidHide() {
-        // Drives the ActionKit observer directly through the same
-        // termination-recovery path the workspace-notification hook calls,
-        // without needing a real NSRunningApplication.
+    /// Drives the real `NSWorkspace.didTerminateApplicationNotification`
+    /// path end to end, through an injected workspace `NotificationCenter`
+    /// rather than the real one. `NSRunningApplication` has no public
+    /// initializer, so there's no way to fabricate a termination notice for
+    /// an arbitrary bundle id — instead the bridge's `bundleId` is injected
+    /// to match the one real `NSRunningApplication` a test can get a handle
+    /// on: the test process itself, `NSRunningApplication.current`.
+    func testWorkspaceTerminationOfMatchingBundleIdResumes() throws {
+        guard let testBundleId = NSRunningApplication.current.bundleIdentifier else {
+            throw XCTSkip("test process has no bundle id to match against")
+        }
         let center = NotificationCenter()
+        let workspaceCenter = NotificationCenter()
         var seen: [Bool] = []
         let suspendedExp = expectation(description: "suspended")
         let resumedExp = expectation(description: "resumed via termination")
-        let observer = LaunchPadPresenceObserver(center: center) { suspended in
+        let bridge = LaunchPadPresenceBridge(
+            center: center, workspaceCenter: workspaceCenter, bundleId: testBundleId
+        ) { suspended in
             seen.append(suspended)
             if suspended { suspendedExp.fulfill() } else { resumedExp.fulfill() }
         }
 
-        center.post(name: LaunchPadPresence.didShow, object: nil)
+        center.post(name: LaunchPadPresenceBridge.didShow, object: nil)
         wait(for: [suspendedExp], timeout: 2.0)
-        observer.providerTerminated()
+
+        workspaceCenter.post(
+            name: NSWorkspace.didTerminateApplicationNotification,
+            object: nil,
+            userInfo: [NSWorkspace.applicationUserInfoKey: NSRunningApplication.current])
         wait(for: [resumedExp], timeout: 2.0)
 
         XCTAssertEqual(seen, [true, false])
-        observer.invalidate()
+        bridge.invalidate()
+    }
+
+    /// Same termination notice, but the bridge is watching for a different
+    /// bundle id: must not resume.
+    func testWorkspaceTerminationOfUnrelatedBundleIdIsIgnored() {
+        let center = NotificationCenter()
+        let workspaceCenter = NotificationCenter()
+        var changeCount = 0
+        let suspendedExp = expectation(description: "suspended")
+        let unwantedResume = expectation(description: "unwanted resume")
+        unwantedResume.isInverted = true
+        let bridge = LaunchPadPresenceBridge(
+            center: center, workspaceCenter: workspaceCenter, bundleId: "com.example.not-launchpad"
+        ) { suspended in
+            changeCount += 1
+            if suspended { suspendedExp.fulfill() } else { unwantedResume.fulfill() }
+        }
+
+        center.post(name: LaunchPadPresenceBridge.didShow, object: nil)
+        wait(for: [suspendedExp], timeout: 2.0)
+
+        workspaceCenter.post(
+            name: NSWorkspace.didTerminateApplicationNotification,
+            object: nil,
+            userInfo: [NSWorkspace.applicationUserInfoKey: NSRunningApplication.current])
+        wait(for: [unwantedResume], timeout: 0.3)
+
+        XCTAssertEqual(changeCount, 1)
+        XCTAssertTrue(bridge.isSuspended)
+        bridge.invalidate()
     }
 
     func testTerminatedBundleIdExtractionIgnoresUnrelatedNotifications() {

@@ -27,6 +27,7 @@ final class NotchPanelController {
     private var watchdog: Timer?
     private var launchPadBridge: LaunchPadPresenceBridge?
     private var isSuspendedForLaunchPad = false
+    private var wasExpandedBeforeLaunchPadSuspend = false
 
     private var tracker: PointerTrackingService { environment.pointerTracker }
     private var diagnostics: NotchDiagnostics { environment.diagnostics }
@@ -67,8 +68,14 @@ final class NotchPanelController {
         // app-integration-design.md §4). Suspended: collapse, order out, stop
         // reacting to hot zones/pointer tracking/drag hover, pause the
         // watchdog. Resumed: restore exactly as the sequence above does.
-        launchPadBridge = LaunchPadPresenceBridge { [weak self] suspended in
-            self?.setSuspendedForLaunchPad(suspended)
+        // Skipped under XCTest (same guard AppEnvironment uses for the
+        // decision socket): unit tests construct many short-lived
+        // NotchPanelController instances and must not register real
+        // DistributedNotificationCenter/NSWorkspace observers for each one.
+        if NSClassFromString("XCTestCase") == nil {
+            launchPadBridge = LaunchPadPresenceBridge { [weak self] suspended in
+                self?.setSuspendedForLaunchPad(suspended)
+            }
         }
     }
 
@@ -76,16 +83,27 @@ final class NotchPanelController {
         guard suspended != isSuspendedForLaunchPad else { return }
         isSuspendedForLaunchPad = suspended
         if suspended {
+            // Pin survives compact() unchanged (AppState only clears it via
+            // setPinnedByUser), so it's still readable on resume below —
+            // only "was it open at all" needs capturing here.
+            wasExpandedBeforeLaunchPadSuspend = environment.appState.isExpanded
             environment.appState.compact()
             tracker.stop()
             watchdog?.invalidate()
             watchdog = nil
             panel.orderOut(nil)
         } else {
-            tracker.start()
+            // Hot zones before the tracker starts recomputing against them.
             reposition(animated: false)
+            tracker.start()
             panel.orderFrontRegardless()
             startWatchdog()
+            // Exact restore: a pinned-open panel re-expands instead of
+            // leaving the user to reopen it by hand.
+            if wasExpandedBeforeLaunchPadSuspend && environment.appState.isPinnedByUser {
+                environment.appState.expand()
+            }
+            wasExpandedBeforeLaunchPadSuspend = false
         }
     }
 

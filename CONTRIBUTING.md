@@ -30,6 +30,22 @@ xcodebuild -project NotchDeck.xcodeproj -scheme NotchDeck \
 Both Debug **and** Release must build, and the full test suite must pass, before
 a PR is ready.
 
+## Building from a git worktree
+
+`project.yml` depends on the local ActionKit package at `../RadialMenu/app`,
+relative to this file. That resolves as-is from the main checkout (`Notch` and
+`RadialMenu` are siblings), but a worktree under `.worktrees/<name>/` is one
+level deeper, so the same relative path needs an extra, untracked symlink from
+the repo root:
+
+```bash
+ln -s ../../RadialMenu .worktrees/RadialMenu
+```
+
+`.worktrees/` is already git-ignored, so the symlink (and the worktree itself)
+never gets committed. Run `xcodegen generate` as usual inside the worktree
+after creating it.
+
 ## Conventions
 
 - Match the surrounding code's style, naming, and comment density.
