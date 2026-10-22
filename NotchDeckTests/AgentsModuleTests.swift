@@ -174,8 +174,8 @@ final class AgentsModuleTests: XCTestCase {
     // MARK: Structure invariants
 
     func testNotchFaceWorkspaces() {
-        // Utilities and Agents are always defined; FaceKey is the optional third
-        // workspace, shown only when the FaceKey app is installed and enabled.
-        XCTAssertEqual(Set(NotchFace.allCases), [.utilities, .agents, .facekey])
+        // Utilities and Agents are always defined; FaceKey (shown only while the
+        // FaceKey app is running and enabled) and Timetable (opt-in) are optional.
+        XCTAssertEqual(Set(NotchFace.allCases), [.utilities, .agents, .facekey, .timetable])
     }
 }

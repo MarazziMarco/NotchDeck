@@ -19,8 +19,9 @@ struct ModulesScreen: View {
                     id: m.id, name: m.displayName, icon: m.iconName,
                     defaultEnabled: m.defaultEnabled, hasSettings: Self.legacyHasSettings(m.id))
             }
-            // Agents is a built-in TOP-LEVEL WORKSPACE (not a Home card / tab).
-            + [AgentsModule.descriptor],
+            // Agents, FaceKey and Timetable are built-in TOP-LEVEL WORKSPACES
+            // (not Home cards / tabs).
+            + [AgentsModule.descriptor, FaceKeyModule.descriptor, TimetableModule.descriptor],
             community: community.descriptors,
             example: [UptimeExampleModule.descriptor],
             includeExample: Self.showExamples(settings.settings.showDeveloperModules))
@@ -220,6 +221,21 @@ struct ModuleDetailSheet: View {
                         Divider()
                         Text("Settings").font(.headline)
                         SystemPulseSettingsView()
+                    }
+                    if d.identifier == FaceKeyModule.identifier {
+                        Divider()
+                        Text("Settings").font(.headline)
+                        FaceKeyModuleSettings()
+                    }
+                    if d.identifier == TimetableModule.identifier {
+                        Divider()
+                        Text("Settings").font(.headline)
+                        Text("Import your timetable, choose the courses you follow and edit lessons in the Timetable settings section.")
+                            .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Open Timetable Settings") {
+                            SettingsWindowPresenter.shared.show(section: .timetable)
+                        }.controlSize(.small)
                     }
                     if d.identifier == AgentsModule.identifier {
                         Divider()
