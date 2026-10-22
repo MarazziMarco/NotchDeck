@@ -24,11 +24,14 @@ struct NotchRootView: View {
                     width: notchLayout.visibleSurfaceSize.width,
                     height: notchLayout.visibleSurfaceSize.height
                 )
+                // Clip BEFORE offsetting: a clip applied after `.offset` stays at the
+                // un-offset (screen-centred) frame, which cut off the outer part of
+                // an asymmetric capsule (single-provider Agents wing, Focus).
+                .clipShape(BottomRoundedShape(radius: surface.cornerRadius))
                 .offset(
                     x: notchLayout.visibleSurfaceOffsetX,
                     y: notchLayout.visibleSurfaceTopInset
                 )
-                .clipShape(BottomRoundedShape(radius: surface.cornerRadius))
                 .animation(
                     DesignTokens.Motion.expand(reduceMotion: appState.reduceMotion),
                     value: notchLayout.visibleSurfaceSize

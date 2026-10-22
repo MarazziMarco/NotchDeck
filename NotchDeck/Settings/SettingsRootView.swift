@@ -10,6 +10,7 @@ struct SettingsRootView: View {
         case fileShelf = "File Shelf"
         case mirror = "Mirror"
         case pomodoro = "Pomodoro"
+        case timetable = "Timetable"
         case agents = "Coding Agents"
         case permissions = "Permissions"
         case diagnostics = "Diagnostics"
@@ -25,6 +26,7 @@ struct SettingsRootView: View {
             case .fileShelf: return "tray.full"
             case .mirror: return "web.camera"
             case .pomodoro: return "timer"
+            case .timetable: return "calendar"
             case .agents: return "cpu"
             case .permissions: return "lock.shield"
             case .diagnostics: return "stethoscope"
@@ -92,6 +94,7 @@ struct SettingsRootView: View {
         case .fileShelf: FileShelfSettingsView()
         case .mirror: MirrorSettingsView()
         case .pomodoro: PomodoroSettingsView()
+        case .timetable: TimetableSettingsView()
         case .agents: AgentsSettingsView()
         case .permissions: PermissionsSettingsView()
         case .diagnostics: DiagnosticsSettingsView()

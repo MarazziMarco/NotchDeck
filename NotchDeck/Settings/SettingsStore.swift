@@ -105,4 +105,8 @@ final class SettingsStore: ObservableObject {
 
     /// Authoritative Agents-workspace enablement (see `AgentsModule`).
     var agentsEnabled: Bool { AgentsModule.isEnabled(settings) }
+
+    /// Authoritative FaceKey-workspace enablement: on only when the toggle is set
+    /// AND the separate FaceKey app is running (see `FaceKeyModule`).
+    var facekeyWorkspaceEnabled: Bool { FaceKeyModule.isEnabled(settings) }
 }

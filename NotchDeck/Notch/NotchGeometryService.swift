@@ -95,6 +95,7 @@ enum NotchGeometryService {
         switch face {
         case .utilities: return DesignTokens.Metrics.expandedUtilitiesWidth
         case .agents: return DesignTokens.Metrics.expandedAgentsWidth
+        case .facekey: return DesignTokens.Metrics.expandedAgentsWidth
         }
     }
 

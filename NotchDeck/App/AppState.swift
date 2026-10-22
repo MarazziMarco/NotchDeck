@@ -20,6 +20,11 @@ final class AppState: ObservableObject {
     /// behaviour lives in one place. Mirrors `AppSettings.moduleEnabled`.
     @Published private(set) var agentsEnabled: Bool = true
 
+    /// Single authoritative UI flag for whether the FaceKey workspace is shown.
+    /// True only when the FaceKey module is enabled AND the FaceKey app is
+    /// running, so the workspace never appears without both products.
+    @Published private(set) var facekeyWorkspaceEnabled: Bool = false
+
     /// The ONLY sticky keep-open state. Toggled solely by the Pin button.
     @Published private(set) var isPinnedByUser: Bool = false
 
@@ -50,9 +55,14 @@ final class AppState: ObservableObject {
     init(settings: SettingsStore) {
         self.settings = settings
         self.agentsEnabled = settings.agentsEnabled
-        // Normalise a persisted `.agents` selection to `.utilities` when Agents is
-        // disabled, so no hidden Agents content is ever mounted.
-        let start = settings.agentsEnabled ? settings.settings.defaultFace : .utilities
+        self.facekeyWorkspaceEnabled = settings.facekeyWorkspaceEnabled
+        // Normalise a persisted selection whose workspace is unavailable back to
+        // `.utilities`, so no hidden workspace content is ever mounted.
+        let start = Self.availableFace(
+            settings.settings.defaultFace,
+            agents: settings.agentsEnabled,
+            facekey: settings.facekeyWorkspaceEnabled
+        )
         self.face = start
         machine.switchFace(to: start)
 
@@ -66,6 +76,45 @@ final class AppState: ObservableObject {
             .removeDuplicates()
             .sink { [weak self] enabled in self?.applyAgentsEnabled(enabled) }
             .store(in: &cancellables)
+
+        settings.$settings
+            .map { FaceKeyModule.isEnabled($0) }
+            .removeDuplicates()
+            .sink { [weak self] enabled in self?.applyFacekeyEnabled(enabled) }
+            .store(in: &cancellables)
+
+        // FaceKey running-state drives the workspace too, so launching or
+        // quitting FaceKey adds or removes the workspace live.
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        Publishers.Merge(
+            workspaceCenter.publisher(for: NSWorkspace.didLaunchApplicationNotification),
+            workspaceCenter.publisher(for: NSWorkspace.didTerminateApplicationNotification)
+        )
+        .receive(on: RunLoop.main)
+        .sink { [weak self] _ in self?.refreshFacekeyWorkspace() }
+        .store(in: &cancellables)
+    }
+
+    private func refreshFacekeyWorkspace() {
+        applyFacekeyEnabled(FaceKeyModule.isEnabled(settings.settings))
+    }
+
+    /// The face to show given which workspaces are available; unavailable
+    /// selections fall back to Utilities.
+    private static func availableFace(_ face: NotchFace, agents: Bool, facekey: Bool) -> NotchFace {
+        switch face {
+        case .utilities: return .utilities
+        case .agents: return agents ? .agents : .utilities
+        case .facekey: return facekey ? .facekey : .utilities
+        }
+    }
+
+    /// Apply a FaceKey enable/disable transition. Disabling while FaceKey is the
+    /// current face switches to Utilities immediately.
+    private func applyFacekeyEnabled(_ enabled: Bool) {
+        facekeyWorkspaceEnabled = enabled
+        guard !enabled, face == .facekey else { return }
+        if machine.switchFace(to: .utilities) { sync() }
     }
 
     /// Apply an Agents enable/disable transition. Disabling while Agents is the
@@ -133,9 +182,19 @@ final class AppState: ObservableObject {
         sync()
     }
 
+    /// Ordered faces currently reachable, for the switcher and swipe.
+    var availableFaces: [NotchFace] {
+        var faces: [NotchFace] = [.utilities]
+        if agentsEnabled { faces.append(.agents) }
+        if facekeyWorkspaceEnabled { faces.append(.facekey) }
+        return faces
+    }
+
     func toggleFace(to target: NotchFace? = nil) {
-        // Agents is unreachable while disabled (no switcher, swipe ignored).
-        if !agentsEnabled, (target ?? face.toggled) == .agents { return }
+        // A workspace is unreachable while disabled (no segment, swipe ignored).
+        let resolved = target ?? face.toggled
+        if !agentsEnabled, resolved == .agents { return }
+        if !facekeyWorkspaceEnabled, resolved == .facekey { return }
         if machine.switchFace(to: target) {
             sync()
             settings.settings.defaultFace = machine.face

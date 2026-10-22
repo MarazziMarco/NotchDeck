@@ -199,6 +199,7 @@ enum EditorialHomeLayout {
         case "home": return layoutClass == .compact ? 300 : 330
         case "focus": return 300
         case "files": return 300
+        case "timetable": return 300
         default: return 240
         }
     }

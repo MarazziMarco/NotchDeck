@@ -444,7 +444,15 @@ final class CompactAgentGeometryTests: XCTestCase {
             CompactAgentIndicatorGeometry.totalExtraWidth,
             CompactAgentIndicatorGeometry.wingWidth * 2
         )
-        XCTAssertLessThanOrEqual(CompactAgentIndicatorGeometry.wingWidth, 34)
+        // The active wing fits the outer inset + logo + notch-safe clearance exactly,
+        // so the logo sits fully to the side of the physical camera housing.
+        XCTAssertEqual(
+            CompactAgentIndicatorGeometry.wingWidth,
+            CompactAgentIndicatorGeometry.outerEdgeInset
+                + CompactAgentIndicatorGeometry.iconSize
+                + CompactAgentIndicatorGeometry.notchSafeInset
+        )
+        XCTAssertGreaterThanOrEqual(CompactAgentIndicatorGeometry.notchSafeInset, 16)
         XCTAssertLessThanOrEqual(CompactAgentIndicatorGeometry.outerEdgeInset, 6)
     }
 }

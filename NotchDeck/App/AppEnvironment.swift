@@ -31,6 +31,7 @@ final class AppEnvironment: ObservableObject {
     /// connects, so it is harmless when the Agents module is off.
     let agentDecisionService: AgentDecisionSocket
     let quickNote: QuickNoteService
+    let timetable: TimetableStore
     let nowPlaying: NowPlayingService
     let battery: BatteryService
     let downloads: DownloadsService
@@ -106,6 +107,7 @@ final class AppEnvironment: ObservableObject {
             }
         }
         self.quickNote = QuickNoteService()
+        self.timetable = TimetableStore()
         self.nowPlaying = NowPlayingService(provider: mediaProvider)
         self.battery = BatteryService()
         self.downloads = DownloadsService()
@@ -198,6 +200,7 @@ final class AppEnvironment: ObservableObject {
             .environmentObject(terminalStats)
             .environmentObject(notchLayout)
             .environmentObject(quickNote)
+            .environmentObject(timetable)
             .environmentObject(nowPlaying)
             .environmentObject(liveActivity)
             .environmentObject(responsive)
