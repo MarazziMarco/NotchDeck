@@ -19,8 +19,8 @@ struct ModulesScreen: View {
                     id: m.id, name: m.displayName, icon: m.iconName,
                     defaultEnabled: m.defaultEnabled, hasSettings: Self.legacyHasSettings(m.id))
             }
-            // Agents, FaceKey and Timetable are built-in TOP-LEVEL WORKSPACES
-            // (not Home cards / tabs).
+            // Agents and FaceKey are built-in TOP-LEVEL WORKSPACES; Timetable is
+            // a built-in Utilities tab (none of them are Home cards).
             + [AgentsModule.descriptor, FaceKeyModule.descriptor, TimetableModule.descriptor],
             community: community.descriptors,
             example: [UptimeExampleModule.descriptor],

@@ -96,7 +96,6 @@ enum NotchGeometryService {
         case .utilities: return DesignTokens.Metrics.expandedUtilitiesWidth
         case .agents: return DesignTokens.Metrics.expandedAgentsWidth
         case .facekey: return DesignTokens.Metrics.expandedAgentsWidth
-        case .timetable: return DesignTokens.Metrics.expandedAgentsWidth
         }
     }
 

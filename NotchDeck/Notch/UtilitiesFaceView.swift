@@ -1,9 +1,10 @@
 import SwiftUI
 
 /// Grouped Utilities tabs (iteration 9). Home = curated dashboard; Focus =
-/// Pomodoro; Files = clipboard/downloads/screen/batteries; More = library.
+/// Pomodoro; Files = clipboard/downloads/screen/batteries; Timetable = lesson
+/// timetable (only while its module is enabled); More = library.
 enum UtilitiesTab: String, CaseIterable, Identifiable {
-    case home, focus, files, more
+    case home, focus, files, timetable, more
     var id: String { rawValue }
     var title: String { self == .more ? "More" : rawValue.capitalized }
     var fullTitle: String { title }
@@ -12,15 +13,8 @@ enum UtilitiesTab: String, CaseIterable, Identifiable {
         case .home: return "house"
         case .focus: return "target"
         case .files: return "folder"
+        case .timetable: return "calendar"
         case .more: return "square.grid.2x2"
-        }
-    }
-    var group: ModuleGroup {
-        switch self {
-        case .home: return .home
-        case .focus: return .focus
-        case .files: return .files
-        case .more: return .more
         }
     }
     var widthProfile: UtilitiesWidthProfile {
@@ -28,8 +22,14 @@ enum UtilitiesTab: String, CaseIterable, Identifiable {
         case .home: return .home
         case .focus: return .focus
         case .files: return .files
+        case .timetable: return .timetable
         case .more: return .more
         }
+    }
+
+    /// The tabs shown in the bar. Pure (unit-testable).
+    static func visible(timetableEnabled: Bool) -> [UtilitiesTab] {
+        allCases.filter { $0 != .timetable || timetableEnabled }
     }
 }
 
@@ -43,6 +43,9 @@ struct UtilitiesFaceView: View {
     @State private var tab: UtilitiesTab = .home
 
     private var layoutClass: NotchLayoutClass { responsive.current.layoutClass }
+    private var visibleTabs: [UtilitiesTab] {
+        UtilitiesTab.visible(timetableEnabled: TimetableModule.isEnabled(settings.settings))
+    }
 
     var body: some View {
         // Utilities is the sole root workspace when Agents is disabled: the tab bar
@@ -50,6 +53,7 @@ struct UtilitiesFaceView: View {
         // no leftover selector- or title-height spacer.
         VStack(spacing: 4) {
             AdaptiveTabBar(selection: $tab,
+                           tabs: visibleTabs,
                            labelMode: responsive.current.resolvedTabLabels,
                            layoutClass: layoutClass)
             content
@@ -57,8 +61,13 @@ struct UtilitiesFaceView: View {
         .padding(.top, appState.agentsEnabled ? 4 : 2)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear {
-            tab = UtilitiesTab(rawValue: settings.settings.lastUtilitiesTab) ?? .home
+            let saved = UtilitiesTab(rawValue: settings.settings.lastUtilitiesTab) ?? .home
+            tab = visibleTabs.contains(saved) ? saved : .home
             applyTabHeight()
+        }
+        .onChange(of: visibleTabs) { _, tabs in
+            // Disabling the Timetable module while its tab is open returns Home.
+            if !tabs.contains(tab) { tab = .home }
         }
         .onChange(of: tab) { _, new in
             settings.settings.lastUtilitiesTab = new.rawValue
@@ -81,6 +90,8 @@ struct UtilitiesFaceView: View {
             PomodoroFocusPage()
         case .files:
             FilesTabView()
+        case .timetable:
+            TimetableTabView()
         case .more:
             MoreTabView()
         }
@@ -114,12 +125,13 @@ struct MoreTabView: View {
 /// overflow "More" always present. VoiceOver labels preserved.
 struct AdaptiveTabBar: View {
     @Binding var selection: UtilitiesTab
+    var tabs: [UtilitiesTab] = UtilitiesTab.allCases
     let labelMode: TabLabelMode
     let layoutClass: NotchLayoutClass
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(UtilitiesTab.allCases) { t in
+            ForEach(tabs) { t in
                 Button { selection = t } label: { chip(t) }
                     .buttonStyle(.plain)
                     .accessibilityLabel(t.fullTitle)

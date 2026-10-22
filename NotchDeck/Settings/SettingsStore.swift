@@ -109,7 +109,4 @@ final class SettingsStore: ObservableObject {
     /// Authoritative FaceKey-workspace enablement: on only when the toggle is set
     /// AND the separate FaceKey app is running (see `FaceKeyModule`).
     var facekeyWorkspaceEnabled: Bool { FaceKeyModule.isEnabled(settings) }
-
-    /// Authoritative Timetable-workspace enablement (see `TimetableModule`).
-    var timetableWorkspaceEnabled: Bool { TimetableModule.isEnabled(settings) }
 }

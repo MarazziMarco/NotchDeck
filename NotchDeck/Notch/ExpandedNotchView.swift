@@ -34,15 +34,13 @@ struct ExpandedNotchView: View {
             // Agents module is enabled. When disabled it is removed entirely — no
             // capsule, no single "Utilities" label — and Utilities is the sole
             // root workspace.
-            if appState.agentsEnabled || appState.facekeyWorkspaceEnabled
-                || appState.timetableWorkspaceEnabled {
+            if appState.agentsEnabled || appState.facekeyWorkspaceEnabled {
                 FaceSwitcher(
                     selection: Binding(
                         get: { appState.face },
                         set: { appState.toggleFace(to: $0) }),
                     showAgents: appState.agentsEnabled,
-                    showFacekey: appState.facekeyWorkspaceEnabled,
-                    showTimetable: appState.timetableWorkspaceEnabled)
+                    showFacekey: appState.facekeyWorkspaceEnabled)
             }
             Spacer()
             // The ONLY control that toggles the pin. Being a Button, it consumes
@@ -82,7 +80,6 @@ struct ExpandedNotchView: View {
             case .utilities: UtilitiesFaceView()
             case .agents: AgentsFaceView()
             case .facekey: FaceKeyWorkspaceView()
-            case .timetable: TimetableWorkspaceView()
             }
         }
     }
@@ -137,7 +134,6 @@ struct FaceSwitcher: View {
     @Binding var selection: NotchFace
     var showAgents: Bool = true
     var showFacekey: Bool = false
-    var showTimetable: Bool = false
     @Namespace private var ns
 
     var body: some View {
@@ -145,7 +141,6 @@ struct FaceSwitcher: View {
             segment(.utilities, "square.grid.2x2", "Utilities")
             if showAgents { segment(.agents, "cpu", "Agents") }
             if showFacekey { segment(.facekey, "person.crop.circle.badge.checkmark", "FaceKey") }
-            if showTimetable { segment(.timetable, "calendar", "Timetable") }
         }
         .padding(3)
         .background(Color.black.opacity(0.35), in: Capsule())

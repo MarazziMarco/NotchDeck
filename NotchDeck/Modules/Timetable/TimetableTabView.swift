@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// The Timetable workspace (rendered by `ExpandedNotchView`): today's lessons
+/// The Timetable tab (rendered by `UtilitiesFaceView`): today's lessons
 /// with live now/next status on the left, the week as colour blocks on the
 /// right. Tapping a lesson opens its course sheet in place.
-struct TimetableWorkspaceView: View {
+struct TimetableTabView: View {
     @EnvironmentObject private var store: TimetableStore
     @State private var openCourseID: String?
 

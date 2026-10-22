@@ -35,16 +35,17 @@ struct ScreenGeometry: Equatable {
 /// applied to the sub-linear base, with per-tab hard maxima (all still clamped
 /// to `visibleFrame − 48` and ≥24 pt side margins).
 enum UtilitiesWidthProfile: String, Equatable {
-    case home, focus, files, more
+    case home, focus, files, timetable, more
 
     var hardMax: CGFloat {
         switch self { case .home: return 1120; case .files: return 1000
-                      case .focus: return 900; case .more: return 1000 }
+                      case .focus: return 900; case .timetable: return 1000; case .more: return 1000 }
     }
     /// Base width offset added on top of the user width preference.
     func widthOffset(for pref: PanelWidthPreference) -> CGFloat {
         let base: CGFloat = { switch self { case .home: return 180; case .files: return 80
-                                            case .focus: return -20; case .more: return 60 } }()
+                                            case .focus: return -20; case .timetable: return 120
+                                            case .more: return 60 } }()
         // Wide nudges Home a little further toward its cap; Focus is left narrow.
         if pref == .wide && self == .home { return base + 40 }
         return base

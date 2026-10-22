@@ -1,62 +1,39 @@
 import XCTest
 @testable import NotchDeck
 
-@MainActor
 final class TimetableModuleTests: XCTestCase {
-    private func enabled(_ on: Bool, face: NotchFace = .utilities) -> AppSettings {
-        var settings = AppSettings()
-        settings.defaultFace = face
-        settings.moduleEnabled[TimetableModule.identifier] = on
-        return settings
-    }
-
-    func testDescriptorIsAWorkspaceWithoutCapabilities() {
+    func testDescriptorIsAUtilitiesTabWithoutCapabilities() {
         let d = TimetableModule.descriptor
         XCTAssertEqual(d.identifier, "built-in.timetable")
-        XCTAssertTrue(d.surfaces.contains(.workspace))
+        XCTAssertTrue(d.surfaces.contains(.expandedTab))
         XCTAssertTrue(d.surfaces.contains(.settingsSection))
+        XCTAssertFalse(d.surfaces.contains(.workspace))
         XCTAssertTrue(d.capabilities.isEmpty)
         XCTAssertTrue(d.hasSettings)
-        XCTAssertFalse(d.defaultEnabled, "opt-in")
+        XCTAssertTrue(d.defaultEnabled)
     }
 
     func testEnablementFollowsTheModuleToggle() {
-        XCTAssertFalse(TimetableModule.isEnabled(AppSettings()))
-        XCTAssertTrue(TimetableModule.isEnabled(enabled(true)))
+        XCTAssertTrue(TimetableModule.isEnabled(AppSettings()))
+        var settings = AppSettings()
+        settings.moduleEnabled[TimetableModule.identifier] = false
+        XCTAssertFalse(TimetableModule.isEnabled(settings))
     }
 
-    func testWorkspaceIsNeitherHomeNorMore() {
+    func testModuleIsNeitherAHomeCardNorAMoreCard() {
         let entry = ModuleCatalogEntry(descriptor: TimetableModule.descriptor, source: .builtIn)
         XCTAssertFalse(entry.isHomeModule)
         XCTAssertFalse(entry.isMoreModule)
     }
 
-    func testEnablingAddsTheFaceWithoutSwitchingToIt() {
-        let store = SettingsStore.inMemory(enabled(false))
-        let app = AppState(settings: store)
-        XCTAssertFalse(app.availableFaces.contains(.timetable))
-        store.settings.moduleEnabled[TimetableModule.identifier] = true
-        XCTAssertTrue(app.timetableWorkspaceEnabled)
-        XCTAssertTrue(app.availableFaces.contains(.timetable))
-        XCTAssertEqual(app.face, .utilities)
+    func testTabSitsBeforeMoreOnlyWhileEnabled() {
+        XCTAssertEqual(UtilitiesTab.visible(timetableEnabled: true),
+                       [.home, .focus, .files, .timetable, .more])
+        XCTAssertEqual(UtilitiesTab.visible(timetableEnabled: false), [.home, .focus, .files, .more])
     }
 
-    func testDisablingWhileSelectedReturnsToUtilities() {
-        let store = SettingsStore.inMemory(enabled(true, face: .timetable))
-        let app = AppState(settings: store)
-        XCTAssertEqual(app.face, .timetable)
-        store.settings.moduleEnabled[TimetableModule.identifier] = false
-        XCTAssertEqual(app.face, .utilities)
-    }
-
-    func testPersistedFaceIsNormalisedWhenDisabled() {
-        let app = AppState(settings: SettingsStore.inMemory(enabled(false, face: .timetable)))
-        XCTAssertEqual(app.face, .utilities)
-    }
-
-    func testToggleToTimetableBlockedWhileDisabled() {
-        let app = AppState(settings: SettingsStore.inMemory(enabled(false)))
-        app.toggleFace(to: .timetable)
-        XCTAssertEqual(app.face, .utilities)
+    func testTimetableTabHasItsOwnWidthProfile() {
+        XCTAssertEqual(UtilitiesTab.timetable.widthProfile, .timetable)
+        XCTAssertEqual(UtilitiesTab.timetable.icon, "calendar")
     }
 }

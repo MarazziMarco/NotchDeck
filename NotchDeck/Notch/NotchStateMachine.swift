@@ -12,11 +12,10 @@ enum NotchFace: String, Equatable, Codable, CaseIterable {
     case utilities
     case agents
     case facekey
-    case timetable
 
     /// Binary convenience kept for the no-target toggle default. Explicit
     /// segment taps and the swipe always pass a target, so this never selects
-    /// `.facekey` or `.timetable`.
+    /// `.facekey`.
     var toggled: NotchFace { self == .utilities ? .agents : .utilities }
 }
 

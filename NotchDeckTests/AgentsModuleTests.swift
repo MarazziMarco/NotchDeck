@@ -49,7 +49,7 @@ final class AgentsModuleTests: XCTestCase {
 
     func testAgentsNeverInUtilityNavigation() {
         // The utility tabs are exactly Home/Focus/Files/More — Agents is not one.
-        XCTAssertEqual(UtilitiesTab.allCases.map(\.rawValue), ["home", "focus", "files", "more"])
+        XCTAssertEqual(UtilitiesTab.allCases.map(\.rawValue), ["home", "focus", "files", "timetable", "more"])
         XCTAssertFalse(UtilitiesTab.allCases.contains { $0.rawValue == "agents" })
     }
 
@@ -174,8 +174,8 @@ final class AgentsModuleTests: XCTestCase {
     // MARK: Structure invariants
 
     func testNotchFaceWorkspaces() {
-        // Utilities and Agents are always defined; FaceKey (shown only while the
-        // FaceKey app is running and enabled) and Timetable (opt-in) are optional.
-        XCTAssertEqual(Set(NotchFace.allCases), [.utilities, .agents, .facekey, .timetable])
+        // Utilities and Agents are always defined; FaceKey is the optional third
+        // workspace, shown only while the FaceKey app is running and enabled.
+        XCTAssertEqual(Set(NotchFace.allCases), [.utilities, .agents, .facekey])
     }
 }

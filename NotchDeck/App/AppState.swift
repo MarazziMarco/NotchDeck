@@ -25,9 +25,6 @@ final class AppState: ObservableObject {
     /// running, so the workspace never appears without both products.
     @Published private(set) var facekeyWorkspaceEnabled: Bool = false
 
-    /// Single authoritative UI flag for whether the Timetable workspace is shown.
-    @Published private(set) var timetableWorkspaceEnabled: Bool = false
-
     /// The ONLY sticky keep-open state. Toggled solely by the Pin button.
     @Published private(set) var isPinnedByUser: Bool = false
 
@@ -59,14 +56,12 @@ final class AppState: ObservableObject {
         self.settings = settings
         self.agentsEnabled = settings.agentsEnabled
         self.facekeyWorkspaceEnabled = settings.facekeyWorkspaceEnabled
-        self.timetableWorkspaceEnabled = settings.timetableWorkspaceEnabled
         // Normalise a persisted selection whose workspace is unavailable back to
         // `.utilities`, so no hidden workspace content is ever mounted.
         let start = Self.availableFace(
             settings.settings.defaultFace,
             agents: settings.agentsEnabled,
-            facekey: settings.facekeyWorkspaceEnabled,
-            timetable: settings.timetableWorkspaceEnabled
+            facekey: settings.facekeyWorkspaceEnabled
         )
         self.face = start
         machine.switchFace(to: start)
@@ -88,12 +83,6 @@ final class AppState: ObservableObject {
             .sink { [weak self] enabled in self?.applyFacekeyEnabled(enabled) }
             .store(in: &cancellables)
 
-        settings.$settings
-            .map { TimetableModule.isEnabled($0) }
-            .removeDuplicates()
-            .sink { [weak self] enabled in self?.applyTimetableEnabled(enabled) }
-            .store(in: &cancellables)
-
         // FaceKey running-state drives the workspace too, so launching or
         // quitting FaceKey adds or removes the workspace live.
         let workspaceCenter = NSWorkspace.shared.notificationCenter
@@ -112,22 +101,12 @@ final class AppState: ObservableObject {
 
     /// The face to show given which workspaces are available; unavailable
     /// selections fall back to Utilities.
-    private static func availableFace(_ face: NotchFace, agents: Bool, facekey: Bool,
-                                      timetable: Bool) -> NotchFace {
+    private static func availableFace(_ face: NotchFace, agents: Bool, facekey: Bool) -> NotchFace {
         switch face {
         case .utilities: return .utilities
         case .agents: return agents ? .agents : .utilities
         case .facekey: return facekey ? .facekey : .utilities
-        case .timetable: return timetable ? .timetable : .utilities
         }
-    }
-
-    /// Apply a Timetable enable/disable transition. Disabling while Timetable is
-    /// the current face switches to Utilities immediately.
-    private func applyTimetableEnabled(_ enabled: Bool) {
-        timetableWorkspaceEnabled = enabled
-        guard !enabled, face == .timetable else { return }
-        if machine.switchFace(to: .utilities) { sync() }
     }
 
     /// Apply a FaceKey enable/disable transition. Disabling while FaceKey is the
@@ -208,7 +187,6 @@ final class AppState: ObservableObject {
         var faces: [NotchFace] = [.utilities]
         if agentsEnabled { faces.append(.agents) }
         if facekeyWorkspaceEnabled { faces.append(.facekey) }
-        if timetableWorkspaceEnabled { faces.append(.timetable) }
         return faces
     }
 
@@ -217,7 +195,6 @@ final class AppState: ObservableObject {
         let resolved = target ?? face.toggled
         if !agentsEnabled, resolved == .agents { return }
         if !facekeyWorkspaceEnabled, resolved == .facekey { return }
-        if !timetableWorkspaceEnabled, resolved == .timetable { return }
         if machine.switchFace(to: target) {
             sync()
             settings.settings.defaultFace = machine.face
