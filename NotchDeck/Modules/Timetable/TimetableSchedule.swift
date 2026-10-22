@@ -17,7 +17,8 @@ enum TimetableSchedule {
     }
 
     /// Stable course colours (used when the file gives none).
-    static let palette = ["#8577FF", "#20C997", "#FF7A3D", "#F0588C", "#3BC9DB", "#FCC419", "#94D82D", "#E599F7"]
+    static let palette = ["#8577FF", "#20C997", "#FF7A3D", "#F0588C", "#3BC9DB", "#FCC419",
+                                  "#94D82D", "#E599F7", "#4DABF7", "#FF6B6B", "#A0785A", "#868E96"]
 
     /// How far ahead `status` looks for the next lesson.
     private static let nextLessonHorizonDays = 14
@@ -127,6 +128,42 @@ enum TimetableSchedule {
     static func visibleDays(for lessons: [TimetableLesson]) -> [Weekday] {
         let used = Set(lessons.map(\.day))
         return Weekday.allCases.filter { $0 < .sat || used.contains($0) }
+    }
+
+    /// Horizontal slot of a lesson inside its day column.
+    struct Lane: Equatable {
+        let index: Int
+        let count: Int
+    }
+
+    /// Side-by-side lanes for lessons that overlap on the same day. Lessons that
+    /// overlap (directly or through a chain) form a cluster; each takes the first
+    /// free lane and every lesson in the cluster shares the cluster's lane count.
+    static func lanes(for lessons: [TimetableLesson]) -> [UUID: Lane] {
+        var result: [UUID: Lane] = [:]
+        for day in Weekday.allCases {
+            let sorted = lessons.filter { $0.day == day }.sorted(by: TimetableLesson.displayOrder)
+            var cluster: [(id: UUID, lane: Int)] = []
+            var laneEnds: [ClockTime] = []
+            var clusterEnd: ClockTime?
+
+            func closeCluster() {
+                for member in cluster { result[member.id] = Lane(index: member.lane, count: laneEnds.count) }
+                cluster = []
+                laneEnds = []
+                clusterEnd = nil
+            }
+
+            for lesson in sorted {
+                if let end = clusterEnd, lesson.start >= end { closeCluster() }
+                let lane = laneEnds.firstIndex { $0 <= lesson.start } ?? laneEnds.count
+                if lane == laneEnds.count { laneEnds.append(lesson.end) } else { laneEnds[lane] = lesson.end }
+                cluster.append((lesson.id, lane))
+                clusterEnd = max(clusterEnd ?? lesson.end, lesson.end)
+            }
+            closeCluster()
+        }
+        return result
     }
 
     /// The file's colour, else a palette colour by the course's sorted position.

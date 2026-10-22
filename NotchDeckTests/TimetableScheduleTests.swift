@@ -109,6 +109,20 @@ final class TimetableScheduleTests: XCTestCase {
                        [.mon, .tue, .wed, .thu, .fri, .sun])
     }
 
+    func testOverlappingLessonsShareTheColumnInLanes() {
+        let a = lesson("a", .mon, "10:00", "13:00")
+        let b = lesson("b", .mon, "10:00", "12:00")
+        let c = lesson("c", .mon, "12:00", "14:00")   // overlaps a only
+        let d = lesson("d", .mon, "15:00", "16:00")   // alone
+        let e = lesson("e", .tue, "10:00", "11:00")   // other day
+        let lanes = TimetableSchedule.lanes(for: [a, b, c, d, e])
+        XCTAssertEqual(lanes[a.id], .init(index: 0, count: 2))
+        XCTAssertEqual(lanes[b.id], .init(index: 1, count: 2))
+        XCTAssertEqual(lanes[c.id], .init(index: 1, count: 2), "reuses the lane b freed")
+        XCTAssertEqual(lanes[d.id], .init(index: 0, count: 1))
+        XCTAssertEqual(lanes[e.id], .init(index: 0, count: 1))
+    }
+
     func testPaletteColourIsStableAndExplicitColourWins() {
         let a = TimetableCourse(id: "a", name: "A", short: "A")
         let b = TimetableCourse(id: "b", name: "B", short: "B")

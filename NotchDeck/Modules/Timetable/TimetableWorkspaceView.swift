@@ -195,6 +195,7 @@ private struct TimetableWeekGrid: View {
             let gridHeight = max(1, geo.size.height - headerHeight)
             let pointsPerMinute = gridHeight / CGFloat((hours.upperBound - hours.lowerBound) * 60)
             let columnWidth = (geo.size.width - hourColumnWidth) / CGFloat(days.count)
+            let lanes = TimetableSchedule.lanes(for: lessons)
 
             ZStack(alignment: .topLeading) {
                 // Hour lines + labels.
@@ -232,9 +233,11 @@ private struct TimetableWeekGrid: View {
                     ForEach(lessons.filter { $0.day == day }) { lesson in
                         let top = CGFloat(lesson.start.minutes - hours.lowerBound * 60) * pointsPerMinute
                         let height = CGFloat(lesson.end.minutes - lesson.start.minutes) * pointsPerMinute
+                        let lane = lanes[lesson.id] ?? .init(index: 0, count: 1)
+                        let laneWidth = columnWidth / CGFloat(lane.count)
                         block(lesson, day: day, height: height)
-                            .frame(width: columnWidth - 3, height: max(10, height - 2))
-                            .offset(x: x + 1.5, y: headerHeight + top + 1)
+                            .frame(width: laneWidth - 3, height: max(10, height - 2))
+                            .offset(x: x + CGFloat(lane.index) * laneWidth + 1.5, y: headerHeight + top + 1)
                     }
                 }
 
