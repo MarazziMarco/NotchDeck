@@ -96,8 +96,8 @@ followed set shows a "choose your courses in Settings" hint.)
 - Text fields use the existing editing flag so the panel stays open and becomes
   key while typing.
 
-Maps: `address` of the lesson's location if present, else `<location name> Roma`,
-else `<room> Sapienza Roma`; opened with `https://maps.apple.com/?q=…` via
+Maps: `address` of the lesson's location if present, else the location's name,
+else the room (no city is hard-coded; put it in `address`); opened with `https://maps.apple.com/?q=…` via
 `NSWorkspace` (no network call by NotchDeck itself).
 
 Strings are user-facing English base like the rest of the app.
