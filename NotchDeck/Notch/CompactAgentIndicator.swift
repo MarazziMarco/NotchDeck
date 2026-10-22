@@ -210,9 +210,12 @@ enum CompactAgentIndicatorModel: Equatable {
 
 /// Stable, notch-safe provider wings. Session count never changes their size.
 enum CompactAgentIndicatorGeometry {
-    static let wingWidth: CGFloat = 30
+    /// Active wing = outer inset + logo + notch-safe clearance. The clearance keeps
+    /// the logo fully to the side of the physical camera housing (a small inset let
+    /// the mark slide under the real notch).
+    static let wingWidth: CGFloat = 45
     static let totalExtraWidth: CGFloat = wingWidth * 2
-    static let notchSafeInset: CGFloat = 5
+    static let notchSafeInset: CGFloat = 20
     static let outerEdgeInset: CGFloat = 5
     static let iconSize: CGFloat = 20
 
