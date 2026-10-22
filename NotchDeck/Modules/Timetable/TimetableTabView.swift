@@ -216,6 +216,17 @@ private struct TimetableWeekGrid: View {
 
                 ForEach(Array(days.enumerated()), id: \.element) { index, day in
                     let x = hourColumnWidth + CGFloat(index) * columnWidth
+                    // Clear vertical divider on each day's left edge (and after the last day).
+                    Rectangle()
+                        .fill(Color.white.opacity(0.16))
+                        .frame(width: 1, height: gridHeight)
+                        .offset(x: x, y: headerHeight)
+                    if index == days.count - 1 {
+                        Rectangle()
+                            .fill(Color.white.opacity(0.16))
+                            .frame(width: 1, height: gridHeight)
+                            .offset(x: x + columnWidth - 1, y: headerHeight)
+                    }
                     // Day header + today's tint.
                     Text(day.shortLabel)
                         .font(.system(size: 10, weight: .semibold))
