@@ -53,7 +53,7 @@ enum ModuleSurface: String, CaseIterable, Codable, Equatable, Identifiable {
     case compactLiveActivity
     case settingsSection
     case backgroundService
-    /// A top-level workspace shown beside Utilities (currently only Agents).
+    /// A top-level workspace shown beside Utilities (Agents, FaceKey, Timetable).
     /// Never a Home card or a Utilities tab.
     case workspace
     /// The secondary "More" utility surface. Community modules ALWAYS render here

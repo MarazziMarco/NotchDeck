@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// FaceKey as a top-level NotchDeck workspace (shown beside Utilities and
-/// Agents) — but only when the separate FaceKey app is installed and the module
+/// Agents) — but only while the separate FaceKey app is running and the module
 /// is enabled. NotchDeck never handles the camera, keys, recognition, or file
 /// encryption; the workspace only opens the FaceKey app at the right screen
 /// through the `facekey://` URL scheme.
@@ -128,7 +128,7 @@ struct FaceKeyWorkspaceView: View {
 struct FaceKeyModuleSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("FaceKey runs as its own app. This workspace only opens FaceKey at the right screen; it never receives camera frames, face data, passwords, or keys. It appears only when the FaceKey app is installed.")
+            Text("FaceKey runs as its own app. This workspace only opens FaceKey at the right screen; it never receives camera frames, face data, passwords, or keys. It appears only while the FaceKey app is running.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
