@@ -1,6 +1,6 @@
 # Security Policy
 
-NotchDeck is an early-stage, open-source macOS app. It runs locally, stores data
+NotchDeck is an early-stage macOS app. It runs locally, stores data
 only under `~/Library/Application Support/NotchDeck`, and makes no network calls
 of its own. This document describes how to report vulnerabilities and the
 project's security model.

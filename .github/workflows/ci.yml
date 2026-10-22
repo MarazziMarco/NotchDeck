@@ -3,8 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -28,7 +27,7 @@ jobs:
         run: |
           set -e
           required=(
-            README.md LICENSE CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md
+            README.md LICENSE SECURITY.md
             CHANGELOG.md
             docs/ARCHITECTURE.md docs/AGENT_INTEGRATION.md docs/TROUBLESHOOTING.md
             docs/modules/README.md docs/modules/CREATING_A_MODULE.md

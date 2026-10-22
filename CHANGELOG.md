@@ -8,6 +8,13 @@ NotchDeck is **pre-1.0** and under active development; interfaces may change.
 
 ## [Unreleased]
 
+### Changed
+
+- **License** — NotchDeck is now source-available and proprietary (all rights
+  reserved) instead of MIT. `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, and the
+  pull-request and community-module templates were removed. CI no longer runs
+  on pull requests.
+
 ### Added
 
 - **Community module architecture** — `NotchDeckModule`, `ModuleDescriptor`,

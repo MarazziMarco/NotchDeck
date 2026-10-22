@@ -153,7 +153,6 @@ flowchart LR
 
 - Guide: [docs/modules/CREATING_A_MODULE.md](docs/modules/CREATING_A_MODULE.md)
 - Review: [docs/modules/MODULE_REVIEW_GUIDELINES.md](docs/modules/MODULE_REVIEW_GUIDELINES.md)
-- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Example module:
   [`Modules/Examples/UptimeExampleModule.swift`](NotchDeck/Modules/Examples/UptimeExampleModule.swift)
 
@@ -163,8 +162,7 @@ flowchart LR
 - [Agent Integration](docs/AGENT_INTEGRATION.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Modules](docs/modules/README.md)
-- [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) ·
-  [Code of Conduct](CODE_OF_CONDUCT.md) · [Changelog](CHANGELOG.md)
+- [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 
 ## Privacy
 
@@ -175,6 +173,6 @@ tabs or runs commands.
 
 ## License
 
-[MIT](LICENSE). Provider names and marks ("Claude", "Codex", "Gemini", …) are
+Source-available, proprietary — all rights reserved. See [LICENSE](LICENSE). Provider names and marks ("Claude", "Codex", "Gemini", …) are
 trademarks of their respective owners; NotchDeck is an independent project and
 is not affiliated with them.
