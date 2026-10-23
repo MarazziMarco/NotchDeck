@@ -21,6 +21,7 @@ public struct WidgetFlipCard<Front: View, Settings: View>: View {
     }
     public var body: some View {
         ZStack {
+            if !flipped {
             front()
                 .overlay(alignment: .topTrailing) {
                     Button { error = nil; onEdit() } label: {
@@ -31,7 +32,9 @@ public struct WidgetFlipCard<Front: View, Settings: View>: View {
                     .buttonStyle(.plain).padding(12)
                     .accessibilityLabel("Impostazioni \(title)")
                 }
-                .opacity(flipped ? 0 : 1).allowsHitTesting(!flipped && !isEditing).accessibilityHidden(flipped)
+                .allowsHitTesting(!isEditing)
+                .transition(widgetFlipTransition(reduceMotion: reduceMotion))
+            } else {
             VStack(alignment: .leading, spacing: 9) {
                 HStack {
                     Label(title, systemImage: symbol).font(.system(size: 12, weight: .semibold)).lineLimit(1)
@@ -56,12 +59,17 @@ public struct WidgetFlipCard<Front: View, Settings: View>: View {
             .foregroundStyle(.white).environment(\.colorScheme, .dark)
             .background(LinearGradient(colors: [Color(red: 0.13, green: 0.16, blue: 0.22), Color(red: 0.055, green: 0.075, blue: 0.12)], startPoint: .topLeading, endPoint: .bottomTrailing))
             .clipShape(RoundedRectangle(cornerRadius: 20))
-            .rotation3DEffect(.degrees(reduceMotion ? 0 : 180), axis: (x: 0, y: 1, z: 0))
-            .opacity(flipped ? 1 : 0).allowsHitTesting(flipped && !isEditing).accessibilityHidden(!flipped)
+            .allowsHitTesting(!isEditing)
+            .transition(widgetFlipTransition(reduceMotion: reduceMotion))
+            }
         }
-        .rotation3DEffect(.degrees(reduceMotion || !flipped ? 0 : 180), axis: (x: 0, y: 1, z: 0), perspective: 0.35)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.easeInOut(duration: reduceMotion ? 0.1 : 0.3), value: flipped)
         .onChange(of: isEditing) { _, editing in if editing { flipped = false } }
         .onChange(of: flipped) { _, value in if !value { NSApp.keyWindow?.makeFirstResponder(nil) } }
     }
 }
+
+/// Native controls must stay in an untransformed coordinate space. Swapping the
+/// two faces with opacity keeps pickers and AppKit editors directly clickable.
+func widgetFlipTransition(reduceMotion: Bool) -> AnyTransition { .opacity }

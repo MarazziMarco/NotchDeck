@@ -53,15 +53,14 @@ struct ReversibleWidgetCard<Front: View, Settings: View>: View {
 
     var body: some View {
         ZStack {
+            if !flipped {
             VStack(alignment: .leading, spacing: 10) {
                 header(back: false)
                 front().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .padding(16)
-            .opacity(flipped ? 0 : 1)
-            .accessibilityHidden(flipped)
-            .allowsHitTesting(!flipped)
-
+            .transition(widgetFlipTransition(reduceMotion: reduceMotion))
+            } else {
             VStack(alignment: .leading, spacing: 10) {
                 header(back: true)
                 ScrollView(.vertical) {
@@ -83,10 +82,8 @@ struct ReversibleWidgetCard<Front: View, Settings: View>: View {
                 .font(.system(size: 12, weight: .semibold))
             }
             .padding(16)
-            .rotation3DEffect(.degrees(reduceMotion ? 0 : 180), axis: (x: 0, y: 1, z: 0))
-            .opacity(flipped ? 1 : 0)
-            .accessibilityHidden(!flipped)
-            .allowsHitTesting(flipped)
+            .transition(widgetFlipTransition(reduceMotion: reduceMotion))
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(LinearGradient(colors: [Color(red: 0.13, green: 0.16, blue: 0.22), Color(red: 0.055, green: 0.075, blue: 0.12)], startPoint: .topLeading, endPoint: .bottomTrailing))
@@ -98,7 +95,6 @@ struct ReversibleWidgetCard<Front: View, Settings: View>: View {
         .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
         .foregroundStyle(.white)
         .environment(\.colorScheme, .dark)
-        .rotation3DEffect(.degrees(reduceMotion || !flipped ? 0 : 180), axis: (x: 0, y: 1, z: 0), perspective: 0.35)
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.32), value: flipped)
         .allowsHitTesting(!isEditing)
         .onChange(of: isEditing) { _, editing in if editing { flipped = false } }

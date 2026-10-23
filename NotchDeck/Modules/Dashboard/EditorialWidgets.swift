@@ -51,18 +51,12 @@ struct EditorialNote: View {
                     .fill(paperColor.inkColor.opacity(0.10)).frame(width: 16, height: 16)
             }
             // Editable text fills most of the sheet.
-            WidgetTextEditor(text: $service.text, ink: NSColor(paperColor.inkColor), font: .systemFont(ofSize: settings.settings.noteFontSize.points, weight: .medium))
+            WidgetTextEditor(text: $service.text, placeholder: "Scrivi qui la tua nota…", ink: NSColor(paperColor.inkColor), font: .systemFont(ofSize: settings.settings.noteFontSize.points, weight: .medium))
                 .font(.system(size: settings.settings.noteFontSize.points, weight: .medium))
                 .scrollContentBackground(.hidden)
                 .foregroundStyle(paperColor.inkColor)
                 .tint(paperColor.inkColor)
                 .padding(10)
-                .overlay(alignment: .topLeading) {
-                    if service.isEmpty {
-                        Text("Jot a note…").font(.system(size: settings.settings.noteFontSize.points, weight: .medium))
-                            .foregroundStyle(paperColor.inkColor.opacity(0.4)).padding(14).allowsHitTesting(false)
-                    }
-                }
             if settings.settings.noteShowTitle {
                 Image(systemName: "pencil.and.scribble").font(.system(size: 10))
                     .foregroundStyle(paperColor.inkColor.opacity(0.5))
