@@ -1,5 +1,4 @@
 import SwiftUI
-import SharedWidgets
 
 struct NowPlayingModule: NotchModule {
     let id = "nowPlaying"
@@ -13,17 +12,16 @@ struct NowPlayingModule: NotchModule {
     let defaultGroup: ModuleGroup = .home
     let category: ModuleCategory = .media
 
-    func makeDashboardCard(size: ModuleDashboardSize) -> AnyView { AnyView(SharedProductivityWidget(kind: .music)) }
-    func makeFocusView() -> AnyView { AnyView(SharedProductivityWidget(kind: .music)) }
+    func makeDashboardCard(size: ModuleDashboardSize) -> AnyView {
+        AnyView(NowPlayingCard(size: size))
+    }
+    func makeFocusView() -> AnyView { AnyView(NowPlayingFocusView()) }
 
     let supportedWidgetSizes: [DashboardWidgetSize] = [.compact, .small, .medium, .wide]
     let defaultWidgetSize: DashboardWidgetSize = .medium
     let preferredStyle: DashboardWidgetStyle = .custom
     let canLiveActivity = true
-    func makeWidget(size: DashboardWidgetSize) -> AnyView {
-        if size == .compact { return AnyView(NowPlayingWidget(size: size)) }
-        return AnyView(SharedProductivityWidget(kind: .music))
-    }
+    func makeWidget(size: DashboardWidgetSize) -> AnyView { AnyView(NowPlayingWidget(size: size)) }
 }
 
 struct NowPlayingCard: View {

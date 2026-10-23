@@ -1,5 +1,4 @@
 import SwiftUI
-import SharedWidgets
 
 struct PomodoroModule: NotchModule {
     let id = "pomodoro"
@@ -12,15 +11,17 @@ struct PomodoroModule: NotchModule {
     let defaultPriority = 40
     let defaultGroup: ModuleGroup = .focus
 
-    func makeDashboardCard(size: ModuleDashboardSize) -> AnyView { AnyView(SharedProductivityWidget(kind: .focus)) }
-    func makeFocusView() -> AnyView { AnyView(SharedProductivityWidget(kind: .focus)) }
+    func makeDashboardCard(size: ModuleDashboardSize) -> AnyView {
+        switch size {
+        case .small: return AnyView(PomodoroCompactCard())
+        default: return AnyView(PomodoroExpandedView())
+        }
+    }
+    func makeFocusView() -> AnyView { AnyView(PomodoroExpandedView()) }
 
     let supportedWidgetSizes: [DashboardWidgetSize] = [.compact, .small, .wide]
     let defaultWidgetSize: DashboardWidgetSize = .small
     let preferredStyle: DashboardWidgetStyle = .custom
     let canLiveActivity = true
-    func makeWidget(size: DashboardWidgetSize) -> AnyView {
-        if size == .compact { return AnyView(PomodoroWidget(size: size)) }
-        return AnyView(SharedProductivityWidget(kind: .focus))
-    }
+    func makeWidget(size: DashboardWidgetSize) -> AnyView { AnyView(PomodoroWidget(size: size)) }
 }

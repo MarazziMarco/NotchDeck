@@ -28,9 +28,7 @@ struct EditorialNote: View {
     }
     private var paper: PaperStyleIntensity { settings.settings.paperStyleIntensity }
 
-    var body: some View { NotchNoteFlip { face } }
-
-    private var face: some View {
+    var body: some View {
         GeometryReader { geo in
             // Keep the post-it near-square: width follows height (aspect ~1.05),
             // centred in the zone with intentional negative space if the zone is
@@ -53,7 +51,7 @@ struct EditorialNote: View {
                     .fill(paperColor.inkColor.opacity(0.10)).frame(width: 16, height: 16)
             }
             // Editable text fills most of the sheet.
-            WidgetTextEditor(text: $service.text, ink: NSColor(paperColor.inkColor), font: .systemFont(ofSize: 14))
+            WidgetTextEditor(text: $service.text, ink: NSColor(paperColor.inkColor), font: .systemFont(ofSize: settings.settings.noteFontSize.points, weight: .medium))
                 .font(.system(size: settings.settings.noteFontSize.points, weight: .medium))
                 .scrollContentBackground(.hidden)
                 .foregroundStyle(paperColor.inkColor)

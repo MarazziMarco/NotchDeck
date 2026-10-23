@@ -14,9 +14,9 @@ extension SharedCardModule {
     var defaultWidgetSize: DashboardWidgetSize { .medium }
     var preferredStyle: DashboardWidgetStyle { .custom }
     var canLiveActivity: Bool { false }
-    @MainActor func makeDashboardCard(size: ModuleDashboardSize) -> AnyView { AnyView(SharedProductivityWidget(kind: widgetKind)) }
+    @MainActor func makeDashboardCard(size: ModuleDashboardSize) -> AnyView { AnyView(NotchSharedWidgetSummary(moduleID: id)) }
     @MainActor func makeFocusView() -> AnyView { AnyView(SharedProductivityWidget(kind: widgetKind)) }
-    @MainActor func makeWidget(size: DashboardWidgetSize) -> AnyView { AnyView(SharedProductivityWidget(kind: widgetKind)) }
+    @MainActor func makeWidget(size: DashboardWidgetSize) -> AnyView { AnyView(NotchSharedWidgetSummary(moduleID: id)) }
 }
 struct SharedCountdownModule: SharedCardModule {
     let id = "sharedCountdown"
@@ -42,7 +42,7 @@ struct SharedRoutineModule: NotchModule {
     let supportedWidgetSizes: [DashboardWidgetSize] = [.wide, .large]
     let defaultWidgetSize: DashboardWidgetSize = .large
     let preferredStyle: DashboardWidgetStyle = .custom
-    func makeDashboardCard(size: ModuleDashboardSize) -> AnyView { AnyView(SharedRoutineWidget()) }
+    func makeDashboardCard(size: ModuleDashboardSize) -> AnyView { AnyView(NotchSharedWidgetSummary(moduleID: id)) }
     func makeFocusView() -> AnyView { AnyView(SharedRoutineWidget()) }
-    func makeWidget(size: DashboardWidgetSize) -> AnyView { AnyView(SharedRoutineWidget()) }
+    func makeWidget(size: DashboardWidgetSize) -> AnyView { AnyView(NotchSharedWidgetSummary(moduleID: id)) }
 }

@@ -325,7 +325,7 @@ struct QuickNoteWidget: View {
                             : paperColor.inkColor
                     )
             } else {
-                WidgetTextEditor(text: $service.text, ink: NSColor(paperColor.inkColor), font: .systemFont(ofSize: 14))
+                WidgetTextEditor(text: $service.text, ink: NSColor(paperColor.inkColor), font: .systemFont(ofSize: 12, weight: .medium))
                     .font(.system(size: 12, weight: .medium)).scrollContentBackground(.hidden)
                     .foregroundStyle(paperColor.inkColor)
             }

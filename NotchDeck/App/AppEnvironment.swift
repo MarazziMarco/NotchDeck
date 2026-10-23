@@ -131,7 +131,6 @@ final class AppEnvironment: ObservableObject {
             MirrorModule(),
             PomodoroModule(),
             QuickNoteModule(),
-            TimetableDashboardModule(),
             SharedCountdownModule(),
             SharedHabitsModule(),
             SharedRoutineModule(),
