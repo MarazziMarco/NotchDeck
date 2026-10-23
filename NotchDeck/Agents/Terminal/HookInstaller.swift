@@ -61,6 +61,10 @@ enum HookInstaller {
     /// v6: Codex entries use the documented top-level `hooks` container and
     ///     omit private fields rejected by Codex's strict config decoder.
     static let managedHookVersion = 6
+    /// Bumped when only the helper binary changes (e.g. it now forwards the
+    /// agent's question), so the installed copy is replaced at launch without
+    /// marking the agents' hook configuration as stale.
+    static let helperRevision = 2
     static let managedVersionKey = "notchdeckHookVersion"
 
     // MARK: Helper install
@@ -98,7 +102,7 @@ enum HookInstaller {
             as? String ?? "0"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion")
             as? String ?? "0"
-        return "\(short)-\(build)-hook\(managedHookVersion)"
+        return "\(short)-\(build)-hook\(managedHookVersion)-helper\(helperRevision)"
     }
 
     static func bundledHelperURL() -> URL? {

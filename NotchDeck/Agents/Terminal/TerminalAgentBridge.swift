@@ -282,6 +282,17 @@ struct ExternalPendingRequest: Sendable {
     let summary: String
     let detail: String
     let expiresAt: Date
+
+    /// What an external responder (Arcus) shows: who asks ("Codex · LaunchMe"),
+    /// the agent's own question when it gave one, and the exact action.
+    static func describe(provider: AgentProviderKind, projectPath: String, reason: String?,
+                         action: String, toolName: String?) -> (agent: String, summary: String, detail: String) {
+        let name = provider == .claudeCode ? "Claude Code" : provider == .codex ? "Codex" : "Agent"
+        let project = URL(fileURLWithPath: projectPath).lastPathComponent
+        let agent = projectPath.isEmpty || project.isEmpty ? name : "\(name) · \(project)"
+        if let reason, !reason.isEmpty { return (agent, reason, action) }
+        return (agent, action, toolName ?? action)
+    }
 }
 
 /// Local, user-only bridge that receives real-time events from hook-connected
@@ -474,6 +485,10 @@ actor TerminalAgentBridge {
         }
         for (transactionID, connection) in disconnected {
             pendingApprovals[transactionID] = nil
+            // The helper went away while still waiting: the agent stopped asking
+            // (answered in its terminal, interrupted, or decided by itself).
+            ApprovalLog.write(ApprovalLog.outcomeLine(transactionID: transactionID,
+                                                      outcome: "agent stopped waiting before an answer"))
             Task { @MainActor [store] in
                 store.update(id: connection.appSessionID) {
                     // Socket EOF = the ACTUAL, externally-observed helper
@@ -556,14 +571,21 @@ actor TerminalAgentBridge {
             // Presented in the notch UI → also push to any verified external
             // responder (Arcus). Fire-and-forget; the decision still returns over
             // the verified channel and is applied by `respond`.
+            let actionText = AgentLatestMessage.sanitize(event.summary
+                ?? event.toolName.map { "\($0) — permission requested" } ?? "Permission requested")
+            let reasonText = event.reason.map(PermissionActionSummary.sanitize).flatMap { $0.isEmpty ? nil : $0 }
+            ApprovalLog.write(ApprovalLog.requestLine(
+                transactionID: transactionID, provider: providerKind, projectPath: event.cwd ?? "",
+                toolName: event.toolName, reason: reasonText, action: actionText))
             if let externalNotify {
-                let summaryText = AgentLatestMessage.sanitize(event.summary
-                    ?? event.toolName.map { "\($0) — permission requested" } ?? "Permission requested")
+                let shown = ExternalPendingRequest.describe(
+                    provider: providerKind, projectPath: event.cwd ?? "", reason: reasonText,
+                    action: actionText, toolName: event.toolName)
                 externalNotify(ExternalPendingRequest(
                     transactionID: transactionID,
-                    agent: providerKind == .claudeCode ? "Claude Code" : "Codex",
-                    summary: summaryText,
-                    detail: event.toolName ?? summaryText,
+                    agent: shown.agent,
+                    summary: shown.summary,
+                    detail: shown.detail,
                     expiresAt: Date().addingTimeInterval(approvalLifetime)))
             }
         }
@@ -783,7 +805,7 @@ actor TerminalAgentBridge {
             s.status = .waitingForApproval
             s.requiresAttention = handlingMode.showsFunctionalDecision
             s.latestSummary = summary
-            let transaction = PendingApproval(
+            var transaction = PendingApproval(
                 provider: s.provider,
                 sessionID: event.sessionID,
                 requestID: requestID,
@@ -801,6 +823,7 @@ actor TerminalAgentBridge {
                 handlingMode: handlingMode,
                 fallbackDeadline: fallbackDeadline,
                 nativePromptExpected: handlingMode.nativePromptExpected)
+            transaction.reason = event.reason.map(PermissionActionSummary.sanitize).flatMap { $0.isEmpty ? nil : $0 }
             if s.approval == nil {
                 s.approval = transaction
                 s.pendingApprovalRequestID = requestID
@@ -952,9 +975,13 @@ actor TerminalAgentBridge {
         guard let data = TerminalAgentCodec.encodeLine(decision),
               writeAll(data, to: connection.clientFD) else {
             pendingApprovals[requestID] = nil
+            ApprovalLog.write(ApprovalLog.outcomeLine(transactionID: requestID,
+                                                      outcome: "answer not delivered (agent no longer waiting)"))
             return false
         }
         pendingApprovals[requestID] = nil
+        ApprovalLog.write(ApprovalLog.outcomeLine(transactionID: requestID,
+                                                  outcome: "answered \(allow ? "allow" : "deny") in NotchDeck/Arcus"))
         return true
     }
 
@@ -975,6 +1002,8 @@ actor TerminalAgentBridge {
             return false
         }
         pendingApprovals[requestID] = nil
+        ApprovalLog.write(ApprovalLog.outcomeLine(transactionID: requestID,
+                                                  outcome: "released to the terminal (not answered in NotchDeck)"))
         return true
     }
 

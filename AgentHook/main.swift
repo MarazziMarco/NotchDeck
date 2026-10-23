@@ -230,7 +230,8 @@ var event = TerminalAgentEvent(
     terminalApp: ProcessInfo.processInfo.environment["TERM_PROGRAM"],
     requestID: isDecisionHook ? requestID : nil,
     transactionID: transactionID,
-    toolUseID: toolUseID)
+    toolUseID: toolUseID,
+    reason: parsedPermission?.reason)
 
 let fd = connectSocket()
 if fd < 0 {
