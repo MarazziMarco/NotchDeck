@@ -943,6 +943,14 @@ actor TerminalAgentBridge {
     /// continued" only when provider progression (PostToolUse) is observed, or
     /// cleared by a resolving event. A late/duplicate ack is a no-op.
     static func applyResponseWritten(_ s: inout AgentSession, requestID: String? = nil) {
+        // A queued request answered directly ("Allow all", "Allow always"): it is
+        // done — drop it from the queue so it never resurfaces as still waiting.
+        if let requestID, s.approval?.requestID != requestID,
+           var queued = s.queuedApprovals, let index = queued.firstIndex(where: { $0.requestID == requestID }) {
+            queued.remove(at: index)
+            s.queuedApprovals = queued.isEmpty ? nil : queued
+            return
+        }
         guard let approval = s.approval,
               requestID == nil || approval.requestID == requestID,
               approval.state == .sending || approval.state == .pending else { return }

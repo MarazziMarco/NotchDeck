@@ -918,3 +918,28 @@ final class AllowAlwaysTests: XCTestCase {
         XCTAssertEqual(json?["program"] as? String, "python3")
     }
 }
+
+/// "Allow all" answers queued requests too: once a queued request's answer is
+/// written it must leave the queue, not surface later as still waiting.
+final class QueuedAnswerTests: XCTestCase {
+    private let t0 = Date(timeIntervalSince1970: 5_000_000)
+    private func approval(_ id: String) -> PendingApproval {
+        PendingApproval(provider: .claudeCode, sessionID: "s", requestID: id, providerRequestID: id,
+                        toolUseID: nil, turnID: nil, rawEventName: "PermissionRequest", toolName: "Bash",
+                        summary: "python3 x", receivedAt: t0, expiresAt: t0.addingTimeInterval(60),
+                        state: .pending, handlingMode: .notchWithTerminalFallback,
+                        fallbackDeadline: t0.addingTimeInterval(60), nativePromptExpected: true)
+    }
+
+    func testAnAnsweredQueuedRequestLeavesTheQueue() {
+        var s = AgentSession(id: UUID(), provider: .claudeCode, providerSessionID: "s", title: "Notch",
+                             projectPath: "/p", status: .waitingForApproval, isManaged: false,
+                             isBridgeConnected: true, pendingApprovalRequestID: "A", approval: approval("A"))
+        s.queuedApprovals = [approval("B")]
+        TerminalAgentBridge.applyResponseWritten(&s, requestID: "B")
+        XCTAssertNil(s.queuedApprovals)
+        XCTAssertEqual(s.approval?.requestID, "A")
+        TerminalAgentBridge.applyResponseWritten(&s, requestID: "A")
+        XCTAssertNil(ApprovalPeekQueue.resolve(sessions: [s]).visible)      // nothing left to answer
+    }
+}
