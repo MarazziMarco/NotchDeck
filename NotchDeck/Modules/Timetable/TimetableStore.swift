@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import SharedWidgets
 
 /// Owns the imported timetable and the user's own data (followed courses,
 /// notes, exams). Everything is one small local JSON file; each change is
@@ -10,11 +11,29 @@ import Combine
 final class TimetableStore: ObservableObject {
     @Published private(set) var state: TimetableState
 
+    private(set) var sharedChannel: SharedWidgetChannel<SharedTimetable>?
+    @Published private(set) var sharingError: String?
+    private var sharingObserver: AnyCancellable?
     private let file: JSONFileStore<TimetableState>
 
-    init(file: JSONFileStore<TimetableState> = JSONFileStore(fileName: "timetable.json")) {
+    init(file: JSONFileStore<TimetableState> = JSONFileStore(fileName: "timetable.json"),
+         sharedChannel: SharedWidgetChannel<SharedTimetable>? = nil) {
         self.file = file
         self.state = file.load() ?? TimetableState()
+        if let channel = sharedChannel ?? (file.url.standardizedFileURL == AppPaths.file("timetable.json").standardizedFileURL
+                                          ? SharedWidgetLibrary.shared.timetable : nil) {
+            self.sharedChannel = channel
+            sharingObserver = channel.$value.sink { [weak self] shared in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    do {
+                        self.state = try JSONDecoder().decode(TimetableState.self, from: JSONEncoder().encode(shared))
+                        self.file.save(self.state)
+                        self.sharingError = nil
+                    } catch { self.sharingError = error.localizedDescription }
+                }
+            }
+        }
     }
 
     var timetable: Timetable? { state.timetable }
@@ -38,7 +57,7 @@ final class TimetableStore: ObservableObject {
     /// a grouped file (e.g. 1st/2nd year) lets the user pick theirs.
     private func install(_ timetable: Timetable) {
         let followByDefault = !timetable.courses.contains { $0.group != nil }
-        mutate { state in
+        mutate(clearPDF: true) { state in
             for course in timetable.courses where state.userData[course.id] == nil {
                 state.userData[course.id] = CourseUserData(followed: followByDefault)
             }
@@ -48,7 +67,7 @@ final class TimetableStore: ObservableObject {
 
     /// Removes the timetable; notes and exams stay for a later import.
     func removeTimetable() {
-        mutate { $0.timetable = nil }
+        mutate(clearPDF: true) { $0.timetable = nil }
     }
 
     // MARK: Courses
@@ -117,8 +136,10 @@ final class TimetableStore: ObservableObject {
     private func mutateLessons(_ change: (inout [TimetableLesson]) -> Void) {
         guard state.timetable != nil else { return }
         mutate { state in
-            change(&state.timetable!.lessons)
-            state.timetable!.lessons.sort(by: TimetableLesson.displayOrder)
+            guard var timetable = state.timetable else { return }
+            change(&timetable.lessons)
+            timetable.lessons.sort(by: TimetableLesson.displayOrder)
+            state.timetable = timetable
         }
     }
 
@@ -130,7 +151,21 @@ final class TimetableStore: ObservableObject {
         }
     }
 
-    private func mutate(_ change: (inout TimetableState) -> Void) {
+    private func mutate(clearPDF: Bool = false, _ change: (inout TimetableState) -> Void) {
+        if let channel = sharedChannel {
+            do {
+                try channel.update { shared in
+                    var latest = try JSONDecoder().decode(TimetableState.self, from: JSONEncoder().encode(shared))
+                    change(&latest)
+                    let updated = try JSONDecoder().decode(SharedTimetable.self, from: JSONEncoder().encode(latest))
+                    shared.timetable = updated.timetable
+                    shared.userData = updated.userData
+                    if clearPDF { shared.pdf = nil }
+                }
+                sharingError = nil
+            } catch { sharingError = error.localizedDescription }
+            return
+        }
         var next = state
         change(&next)
         guard next != state else { return }

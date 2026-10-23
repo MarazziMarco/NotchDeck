@@ -176,3 +176,14 @@ tabs or runs commands.
 Source-available, proprietary — all rights reserved. See [LICENSE](LICENSE). Provider names and marks ("Claude", "Codex", "Gemini", …) are
 trademarks of their respective owners; NotchDeck is an independent project and
 is not affiliated with them.
+
+## Widgets shared with LaunchPad
+
+Timetable data and Quick Note are shared locally with LaunchPad when both apps
+are installed. Each app also works on its own. The shared archive lives under
+`~/Library/Application Support/MarazziWidgets/`; widget placement stays local to
+each app. Timetable Settings offers JSON/CSV import and original PDF display.
+
+The vendored `Packages/SharedWidgets` package lets this repository build without a
+LaunchPad checkout. Its canonical source is in LaunchMe/SharedWidgets; maintainers
+can refresh this snapshot with LaunchMe/scripts/sync-shared-widgets.sh.

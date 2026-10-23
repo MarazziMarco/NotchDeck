@@ -1,20 +1,46 @@
 import Foundation
 import Combine
+import SharedWidgets
 
-/// A single local, temporary scratch note. Persisted locally only — no cloud.
+/// One note shared locally with LaunchPad; isolated file names remain independent for tests.
 @MainActor
 final class QuickNoteService: ObservableObject {
     @Published var text: String { didSet { scheduleSave() } }
-
+    @Published private(set) var sharingError: String?
     private let store: JSONFileStore<String>
     private var saveWork: DispatchWorkItem?
+    private var sharedChannel: SharedWidgetChannel<SharedNote>?
+    private var sharingObserver: AnyCancellable?
+    private var receivingSharedValue = false
 
-    init(fileName: String = "quick-note.json") {
-        self.store = JSONFileStore(fileName: fileName)
-        self.text = store.load() ?? ""
+    init(fileName: String = "quick-note.json", sharedChannel: SharedWidgetChannel<SharedNote>? = nil, fileURL: URL? = nil) {
+        store = fileURL.map { JSONFileStore(url: $0) } ?? JSONFileStore(fileName: fileName)
+        text = store.load() ?? ""
+        if let channel = sharedChannel ?? (fileName == "quick-note.json" && fileURL == nil ? SharedWidgetLibrary.shared.note : nil) {
+            self.sharedChannel = channel
+            sharingObserver = channel.$value.sink { [weak self] note in
+                MainActor.assumeIsolated {
+                    guard let self, self.text != note.text else { return }
+                    self.receivingSharedValue = true
+                    self.text = note.text
+                    self.receivingSharedValue = false
+                    self.store.save(note.text)
+                }
+            }
+        }
     }
 
     private func scheduleSave() {
+        guard !receivingSharedValue else { return }
+        if let channel = sharedChannel {
+            let edited = text
+            do {
+                try channel.update { $0.text = edited }
+                store.save(edited)
+                sharingError = nil
+            } catch { sharingError = error.localizedDescription }
+            return
+        }
         saveWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -25,10 +51,6 @@ final class QuickNoteService: ObservableObject {
     }
 
     var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    var firstLine: String {
-        text.split(separator: "\n").first.map(String.init) ?? ""
-    }
-    var wordCount: Int {
-        text.split { $0 == " " || $0 == "\n" }.count
-    }
+    var firstLine: String { text.split(separator: "\n").first.map(String.init) ?? "" }
+    var wordCount: Int { text.split { $0 == " " || $0 == "\n" }.count }
 }

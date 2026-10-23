@@ -68,7 +68,10 @@ struct QuickNoteFocusView: View {
                 .padding(8)
                 .background(DesignTokens.Palette.cardFill,
                             in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            Text("Stored locally on this Mac. No cloud sync.")
+            if let error = service.sharingError {
+                Text(error).font(.caption2).foregroundStyle(.red)
+            }
+            Text("Shared with LaunchPad on this Mac.")
                 .font(.caption2).foregroundStyle(DesignTokens.Palette.tertiaryText)
         }
         .padding(DesignTokens.Metrics.contentPadding)

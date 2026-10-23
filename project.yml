@@ -7,6 +7,10 @@ options:
   groupSortPosition: top
   generateEmptyDirectories: true
 
+packages:
+  SharedWidgets:
+    path: Packages/SharedWidgets
+
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -31,6 +35,7 @@ targets:
           - "**/*.md"
     resources: []
     dependencies:
+      - package: SharedWidgets
       - target: notchdeck-agent-hook
         embed: true
         codeSign: true

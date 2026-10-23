@@ -126,6 +126,7 @@ final class AppEnvironment: ObservableObject {
             MirrorModule(),
             PomodoroModule(),
             QuickNoteModule(),
+            TimetableDashboardModule(),
             NowPlayingModule(),
             DownloadsModule(),
             ScreenshotModule(),

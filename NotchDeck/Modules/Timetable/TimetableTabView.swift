@@ -1,4 +1,5 @@
 import SwiftUI
+import SharedWidgets
 
 /// The Timetable tab (rendered by `UtilitiesFaceView`): today's lessons
 /// with live now/next status on the left, the week as colour blocks on the
@@ -9,7 +10,9 @@ struct TimetableTabView: View {
 
     var body: some View {
         Group {
-            if let timetable = store.timetable {
+            if let channel = store.sharedChannel, channel.value.pdf != nil {
+                SharedTimetableView(channel: channel)
+            } else if let timetable = store.timetable {
                 if let id = openCourseID, let course = timetable.course(id: id) {
                     TimetableCourseSheet(course: course, timetable: timetable) { openCourseID = nil }
                 } else {
@@ -17,6 +20,8 @@ struct TimetableTabView: View {
                         overview(timetable, now: context.date)
                     }
                 }
+            } else if let channel = store.sharedChannel {
+                SharedTimetableView(channel: channel)
             } else {
                 TimetableEmptyState(
                     symbol: "calendar.badge.plus",

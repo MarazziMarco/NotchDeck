@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import SharedWidgets
 
 /// Settings → Timetable: import a `notchdeck-timetable` file, choose the courses
 /// you follow, and add / edit / delete single lessons.
@@ -11,9 +12,19 @@ struct TimetableSettingsView: View {
     @State private var importMessage: String?
     @State private var editing: TimetableLesson?
     @State private var confirmRemove = false
+    @State private var showSharedEditor = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
+            if let channel = store.sharedChannel {
+                SettingsGroup(title: "Shared with LaunchPad") {
+                    Text("Courses, lessons, notes and exams stay in sync between both apps on this Mac.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Import JSON, CSV or PDF / manage shared timetable…") { showSharedEditor = true }
+                    if let error = store.sharingError { Text(error).font(.caption).foregroundStyle(.red) }
+                }
+                .sheet(isPresented: $showSharedEditor) { SharedTimetableEditor(channel: channel) }
+            }
             SettingsGroup(title: "Timetable file") { fileSection }
             if let timetable = store.timetable {
                 SettingsGroup(title: "Courses you follow") { coursesSection(timetable) }
