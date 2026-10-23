@@ -5,10 +5,17 @@ import Foundation
 enum AppPaths {
     static let bundleFolderName = "NotchDeck"
 
+    /// Under XCTest every store goes to a throwaway folder, never the user's
+    /// real NotchDeck data (tests used to leave thousands of files there).
+    static let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        || NSClassFromString("XCTestCase") != nil
+
     static var supportDirectory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory,
-                                            in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
+        let base = isRunningTests
+            ? FileManager.default.temporaryDirectory
+                .appendingPathComponent("NotchDeckTests-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+            : FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? FileManager.default.temporaryDirectory
         let dir = base.appendingPathComponent(bundleFolderName, isDirectory: true)
         ensureDirectory(dir)
         return dir

@@ -260,6 +260,18 @@ enum HookInstaller {
         catch { throw HookError.writeFailed(error.localizedDescription) }
     }
 
+    static let keptBackups = 3
+
+    /// NotchDeck's backups of `fileName` beyond the newest `keep` (by timestamp).
+    static func staleBackups(_ names: [String], of fileName: String, keep: Int) -> [String] {
+        let prefix = fileName + ".notchdeck-backup-"
+        func stamp(_ name: String) -> Int {
+            Int(name.dropFirst(prefix.count).prefix { $0.isNumber }) ?? 0
+        }
+        let ours = names.filter { $0.hasPrefix(prefix) }.sorted { stamp($0) > stamp($1) }
+        return Array(ours.dropFirst(keep))
+    }
+
     private static func backup(_ url: URL) throws -> String? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         let stamp = Int(Date().timeIntervalSince1970 * 1_000)
@@ -268,6 +280,12 @@ enum HookInstaller {
         )
         do {
             try FileManager.default.copyItem(at: url, to: backup)
+            // Keep only the newest few — every install used to add one forever.
+            let dir = url.deletingLastPathComponent()
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+            for stale in staleBackups(names, of: url.lastPathComponent, keep: keptBackups) {
+                try? FileManager.default.removeItem(at: dir.appendingPathComponent(stale))
+            }
             return backup.path
         } catch {
             throw HookError.writeFailed("backup failed: \(error.localizedDescription)")
