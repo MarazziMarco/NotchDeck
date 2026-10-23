@@ -788,3 +788,42 @@ final class HookAncestryTests: XCTestCase {
         XCTAssertEqual(TerminalAgentBridge.ancestry(for: event) { $0 == 99 ? live : [] }, live)
     }
 }
+
+/// Hovering the approval strip never changes its size; long lines scroll
+/// sideways instead, so Allow/Deny stay exactly where they were.
+final class PeekSteadyHoverTests: XCTestCase {
+    func testHoveringKeepsTheStripHeight() {
+        let metrics = DisplayMetrics(frame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+                                     notchHeight: 32, notchWidth: 200, backingScaleFactor: 2,
+                                     visibleFrame: CGRect(x: 0, y: 0, width: 1512, height: 950))
+        XCTAssertEqual(ApprovalPeekGeometry.frame(for: metrics, hovering: true),
+                       ApprovalPeekGeometry.frame(for: metrics, hovering: false))
+    }
+
+    func testOnlyOverflowingTextScrollsAndByJustTheOverflow() {
+        XCTAssertEqual(PeekMarquee.travel(textWidth: 120, boxWidth: 200), 0)
+        XCTAssertEqual(PeekMarquee.travel(textWidth: 320, boxWidth: 200), 120 + PeekMarquee.endPadding)
+    }
+
+    func testScrollSpeedIsReadable() {
+        let t = PeekMarquee.travel(textWidth: 600, boxWidth: 200)
+        XCTAssertEqual(PeekMarquee.duration(travel: t), t / PeekMarquee.pointsPerSecond, accuracy: 0.001)
+        XCTAssertGreaterThanOrEqual(PeekMarquee.duration(travel: 5), PeekMarquee.minimumDuration)
+    }
+}
+
+/// Arcus is told when a request it was shown is settled elsewhere (notch,
+/// terminal, agent gone), so it never keeps offering Accept/Deny.
+final class ExternalWithdrawTests: XCTestCase {
+    func testWithdrawFrame() {
+        let id = UUID()
+        let frame = AgentDecisionSocket.withdrawFrame(id: id)
+        XCTAssertEqual(frame["type"] as? String, "withdraw")
+        XCTAssertEqual(frame["id"] as? String, id.uuidString)
+    }
+
+    func testOnlyUUIDTransactionsAreWithdrawn() {
+        XCTAssertNil(AgentDecisionSocket.withdrawFrame(transactionID: "not-a-uuid"))
+        XCTAssertNotNil(AgentDecisionSocket.withdrawFrame(transactionID: UUID().uuidString))
+    }
+}

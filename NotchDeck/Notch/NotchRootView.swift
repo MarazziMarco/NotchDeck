@@ -158,38 +158,25 @@ struct ApprovalPeekView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     // The agent's own question first ("Posso compilare…?"), then the
-                    // exact action — so it's clear who asks what, and why.
+                    // exact action. One line each; on hover a line that doesn't
+                    // fit scrolls sideways — the strip never grows.
                     if let question = presentation.question {
-                        Text(question)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(DesignTokens.Palette.primaryText)
-                            .lineLimit(peek.isHovering ? 3 : 1)
-                            .truncationMode(.tail)
+                        PeekMarqueeText(text: question,
+                                        font: .system(size: 11, weight: .semibold),
+                                        color: DesignTokens.Palette.primaryText,
+                                        active: peek.isHovering, reduceMotion: appState.reduceMotion)
                     }
-                    Text(presentation.actionSummary)
-                        .font(.system(
-                            size: presentation.question == nil ? 11 : 10,
-                            weight: .medium,
-                            design: presentation.isCommand ? .monospaced : .default
-                        ))
-                        .foregroundStyle(presentation.question == nil
-                                         ? DesignTokens.Palette.primaryText
-                                         : DesignTokens.Palette.secondaryText)
-                        .lineLimit(peek.isHovering ? 3 : 1)
-                        .truncationMode(.middle)
-                    if peek.isHovering {
-                        Text(item.projectPath.isEmpty ? "Working directory unavailable" : item.projectPath)
-                            .font(.system(size: 9.5, design: .monospaced))
-                            .foregroundStyle(DesignTokens.Palette.tertiaryText)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Text("\(presentation.providerName) session · \(item.approval.sessionID)")
-                            .font(.system(size: 9))
-                            .foregroundStyle(DesignTokens.Palette.tertiaryText)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
+                    PeekMarqueeText(text: presentation.actionSummary,
+                                    font: .system(size: presentation.question == nil ? 11 : 10, weight: .medium,
+                                                  design: presentation.isCommand ? .monospaced : .default),
+                                    color: presentation.question == nil
+                                        ? DesignTokens.Palette.primaryText : DesignTokens.Palette.secondaryText,
+                                    active: peek.isHovering, reduceMotion: appState.reduceMotion)
                 }
+                .help([presentation.question, presentation.actionSummary,
+                       item.projectPath.isEmpty ? nil : item.projectPath,
+                       "\(presentation.providerName) session · \(item.approval.sessionID)"]
+                    .compactMap { $0 }.joined(separator: "\n"))
                 .frame(maxWidth: .infinity, minHeight: pinnedRow, alignment: .leading)
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -411,5 +398,65 @@ struct BottomRoundedShape: InsettableShape {
                           control: CGPoint(x: r.minX, y: r.maxY))
         path.closeSubpath()
         return path
+    }
+}
+
+
+/// One line of the approval strip. While `active` (hovered) and too long for its
+/// box, it scrolls left to show the rest, then back; otherwise it truncates.
+private struct PeekMarqueeText: View {
+    let text: String
+    let font: Font
+    let color: Color
+    let active: Bool
+    let reduceMotion: Bool
+    @State private var textWidth: CGFloat = 0
+    @State private var boxWidth: CGFloat = 0
+    @State private var offset: CGFloat = 0
+
+    private var travel: CGFloat { PeekMarquee.travel(textWidth: textWidth, boxWidth: boxWidth) }
+    private var scrolling: Bool { active && !reduceMotion && travel > 0 }
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            if scrolling {
+                Text(text).font(font).foregroundStyle(color).lineLimit(1).fixedSize()
+                    .offset(x: offset)
+            } else {
+                Text(text).font(font).foregroundStyle(color).lineLimit(1).truncationMode(.tail)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipped()
+        .background(GeometryReader { box in
+            Color.clear
+                .onAppear { boxWidth = box.size.width }
+                .onChange(of: box.size.width) { _, w in boxWidth = w }
+        })
+        .background(
+            // Natural single-line width, measured off-screen.
+            Text(text).font(font).lineLimit(1).fixedSize().hidden()
+                .background(GeometryReader { t in
+                    Color.clear
+                        .onAppear { textWidth = t.size.width }
+                        .onChange(of: t.size.width) { _, w in textWidth = w }
+                })
+        )
+        .onChange(of: scrolling) { _, on in restart(on) }
+        .onAppear { restart(scrolling) }
+        .accessibilityLabel(text)
+    }
+
+    private func restart(_ on: Bool) {
+        if on {
+            offset = 0
+            withAnimation(.linear(duration: PeekMarquee.duration(travel: travel))
+                .delay(PeekMarquee.startDelay)
+                .repeatForever(autoreverses: true)) {
+                offset = -travel
+            }
+        } else {
+            withAnimation(.easeOut(duration: 0.15)) { offset = 0 }
+        }
     }
 }

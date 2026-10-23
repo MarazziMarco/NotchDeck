@@ -325,15 +325,16 @@ enum ApprovalPeekGeometry {
     static let minimumWidth: CGFloat = 560
     static let maximumWidth: CGFloat = 720
     static let collapsedHeight: CGFloat = 82
-    static let hoverHeight: CGFloat = 126
 
     static func width(for metrics: DisplayMetrics) -> CGFloat {
         min(maximumWidth, max(minimumWidth, metrics.frame.width * 0.46))
     }
 
+    /// Hovering never resizes the strip (long lines scroll sideways instead), so
+    /// Allow/Deny never move under the pointer.
     static func frame(for metrics: DisplayMetrics, hovering: Bool) -> CGRect {
         let width = width(for: metrics)
-        let height = hovering ? hoverHeight : collapsedHeight
+        let height = collapsedHeight
         return CGRect(
             x: (metrics.frame.midX - width / 2).rounded(),
             y: (metrics.topAnchorY - height).rounded(),

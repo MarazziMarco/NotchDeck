@@ -140,9 +140,14 @@ final class AgentDecisionSocket: @unchecked Sendable {
         self.onFocus = onFocus
     }
 
+    /// The running service, so the terminal bridge can withdraw settled requests
+    /// from Arcus without extra wiring (one service per app).
+    nonisolated(unsafe) private(set) static weak var current: AgentDecisionSocket?
+
     func start() {
         stateLock.lock(); defer { stateLock.unlock() }
         guard !running else { return }
+        Self.current = self
         let path = AgentDecisionSocketPath.url().path
         do {
             let lease = try BridgeSocketBootstrap.bind(path: path)
@@ -232,6 +237,21 @@ final class AgentDecisionSocket: @unchecked Sendable {
         default:
             break
         }
+    }
+
+    /// "This request is settled elsewhere — stop offering it" (answered in the
+    /// notch or terminal, released, or the agent stopped waiting).
+    static func withdrawFrame(id: UUID) -> [String: Any] { ["type": "withdraw", "id": id.uuidString] }
+
+    static func withdrawFrame(transactionID: String) -> [String: Any]? {
+        UUID(uuidString: transactionID).map(withdrawFrame(id:))
+    }
+
+    /// Tell every verified peer (Arcus) a request is no longer pending.
+    func withdraw(transactionID: String) {
+        guard let frame = Self.withdrawFrame(transactionID: transactionID) else { return }
+        peersLock.lock(); let targets = peers; peersLock.unlock()
+        for fd in targets { writeFrame(frame, to: fd) }
     }
 
     /// Push a pending request to every verified peer (best-effort).
