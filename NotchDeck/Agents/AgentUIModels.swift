@@ -593,6 +593,8 @@ struct PendingApproval: Equatable, Codable {
     var decidedAllow: Bool? = nil
     /// The agent's own question/reason for this request, when it gave one.
     var reason: String? = nil
+    /// The program/tool "Allow always" would unlock (e.g. "python3").
+    var programLabel: String? = nil
 
     var isLive: Bool { state == .pending }
     var actionDeadline: Date { fallbackDeadline ?? expiresAt }
@@ -766,6 +768,8 @@ struct ApprovalPeekPresentation: Equatable {
     let actionSummary: String
     /// The agent's own question ("Posso compilare…?"), shown first when present.
     let question: String?
+    /// For "Allow always <program> · this session".
+    let program: String?
     let queueText: String?
     let groupAccessibilityLabel: String
     let allowAccessibilityLabel: String
@@ -789,6 +793,7 @@ struct ApprovalPeekPresentation: Equatable {
             ? item.approval.toolName! : "Action"
         actionSummary = item.approval.summary
         question = item.approval.reason
+        program = item.approval.programLabel
         queueText = totalCount > 1 ? "1/\(totalCount)" : nil
         let position = totalCount > 1 ? ", request 1 of \(totalCount)" : ""
         let asks = question.map { " — \($0)" } ?? ""

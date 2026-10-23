@@ -273,6 +273,7 @@ private struct PendingApprovalConnection {
     let providerRequestID: String
     let appSessionID: UUID
     let actionableUntil: Date
+    var program: PermissionProgram? = nil
 }
 
 /// A permission request surfaced to an external verified responder (Arcus).
@@ -282,6 +283,7 @@ struct ExternalPendingRequest: Sendable {
     let summary: String
     let detail: String
     let expiresAt: Date
+    var program: String? = nil
 
     /// What an external responder (Arcus) shows: who asks ("Codex · LaunchMe"),
     /// the agent's own question when it gave one, and the exact action.
@@ -320,6 +322,8 @@ actor TerminalAgentBridge {
     /// Per-helper transaction UUID → exact live socket and correlated identities.
     /// Provider-native request IDs are not globally unique and never key this map.
     private var pendingApprovals: [String: PendingApprovalConnection] = [:]
+    /// "Allow always <program>" rules, per app session.
+    private var alwaysAllow = AlwaysAllowRules()
     /// session UUID → last event time (for offline sweep).
     private var lastSeen: [UUID: Date] = [:]
 
@@ -556,7 +560,8 @@ actor TerminalAgentBridge {
                     clientFD: connection.clientFD,
                     providerRequestID: connection.providerRequestID,
                     appSessionID: uuid,
-                    actionableUntil: connection.actionableUntil)
+                    actionableUntil: connection.actionableUntil,
+                    program: connection.program)
             }
         }
         lastSeen[uuid] = Date()
@@ -581,12 +586,23 @@ actor TerminalAgentBridge {
                     return
                 }
             }
+            let program = PermissionProgram.of(toolName: event.toolName, action: event.summary ?? "")
             pendingApprovals[transactionID] = PendingApprovalConnection(
                 clientFD: client,
                 providerRequestID: providerRequestID,
                 appSessionID: uuid,
-                actionableUntil: Date().addingTimeInterval(approvalLifetime)
+                actionableUntil: Date().addingTimeInterval(approvalLifetime),
+                program: program
             )
+            // "Allow always <program>" was chosen for this session: answer at once,
+            // no strip, no Arcus prompt.
+            if uiAvailable, handlingMode != .terminalOnly, alwaysAllow.allows(program, in: uuid) {
+                ApprovalLog.write(ApprovalLog.outcomeLine(
+                    transactionID: transactionID,
+                    outcome: "allowed automatically (Always allow \(program.label) in this session)"))
+                _ = respond(requestID: transactionID, allow: true, message: nil)
+                return
+            }
             // Agents UI disabled: do not wait for an approval UI that will never
             // appear. Release the helper at once so the provider resumes its native
             // permission flow (safe fallback, never auto-approve).
@@ -614,7 +630,8 @@ actor TerminalAgentBridge {
                     agent: shown.agent,
                     summary: shown.summary,
                     detail: shown.detail,
-                    expiresAt: Date().addingTimeInterval(approvalLifetime)))
+                    expiresAt: Date().addingTimeInterval(approvalLifetime),
+                    program: PermissionProgram.of(toolName: event.toolName, action: actionText).label))
             }
         }
 
@@ -655,6 +672,7 @@ actor TerminalAgentBridge {
             return
         }
 
+        if event.type == .sessionEnded { alwaysAllow.forget(uuid) }
         if event.type == .agentStopped || event.type == .sessionEnded {
             await releasePendingToTerminal(
                 for: uuid,
@@ -892,6 +910,7 @@ actor TerminalAgentBridge {
                 fallbackDeadline: fallbackDeadline,
                 nativePromptExpected: handlingMode.nativePromptExpected)
             transaction.reason = event.reason.map(PermissionActionSummary.sanitize).flatMap { $0.isEmpty ? nil : $0 }
+            transaction.programLabel = PermissionProgram.of(toolName: event.toolName, action: event.summary ?? "").label
             if s.approval == nil {
                 s.approval = transaction
                 s.pendingApprovalRequestID = requestID
@@ -1055,6 +1074,31 @@ actor TerminalAgentBridge {
         return true
     }
 
+    /// "Allow always": allow this request, remember its program for the rest of
+    /// the session, and allow any other pending request of that program there.
+    @discardableResult
+    func respondAlways(requestID: String) -> Bool {
+        guard let connection = pendingApprovals[requestID] else { return false }
+        if let program = connection.program {
+            alwaysAllow.allow(program, in: connection.appSessionID)
+            ApprovalLog.write(ApprovalLog.outcomeLine(
+                transactionID: requestID, outcome: "Always allow \(program.label) in this session"))
+            let siblings = pendingApprovals.filter {
+                $0.key != requestID && $0.value.appSessionID == connection.appSessionID
+                    && $0.value.program == program && Date() < $0.value.actionableUntil
+            }
+            for id in siblings.keys { _ = respond(requestID: id, allow: true, message: nil) }
+        }
+        return respond(requestID: requestID, allow: true, message: nil)
+    }
+
+    /// "Allow all": allow every request still waiting for an answer. Returns how many.
+    @discardableResult
+    func respondAllPending() -> Int {
+        let live = pendingApprovals.filter { Date() < $0.value.actionableUntil }.keys
+        return live.reduce(0) { $0 + (respond(requestID: $1, allow: true, message: nil) ? 1 : 0) }
+    }
+
     /// Release a still-blocked helper at the hybrid fallback deadline: tell it to
     /// stop waiting and return empty stdout (native prompt).
     @discardableResult
@@ -1199,4 +1243,51 @@ actor TerminalAgentBridge {
         }
         return released
     }
+}
+
+
+/// What "Allow always" unlocks: the program a request runs (shell commands) or
+/// the tool it uses (edits, patches, MCP). Equal by key; `label` is shown.
+struct PermissionProgram: Hashable {
+    let key: String
+    let label: String
+
+    static func == (a: Self, b: Self) -> Bool { a.key == b.key }
+    func hash(into h: inout Hasher) { h.combine(key) }
+
+    private static let shellTools: Set<String> = [
+        "bash", "shell", "exec", "exec_command", "local_shell", "shell_command", "unified_exec",
+    ]
+
+    static func of(toolName: String?, action: String) -> PermissionProgram {
+        let tool = (toolName ?? "").lowercased()
+        guard tool.isEmpty || shellTools.contains(tool) else {
+            return PermissionProgram(key: "tool:\(tool)", label: toolName ?? tool)
+        }
+        var words = action.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" }).map(String.init)
+        // "cd <dir> && real command" → the real command.
+        if words.first == "cd", let and = words.firstIndex(of: "&&") { words = Array(words[(and + 1)...]) }
+        // Leading VAR=value assignments aren't the program.
+        while let w = words.first, w.range(of: #"^[A-Za-z_][A-Za-z0-9_]*="#, options: .regularExpression) != nil {
+            words.removeFirst()
+        }
+        func clean(_ w: String) -> String { w.trimmingCharacters(in: CharacterSet(charactersIn: "'\"")) }
+        guard let first = words.first.map(clean), !first.isEmpty else {
+            return PermissionProgram(key: "tool:\(tool)", label: toolName ?? "command")
+        }
+        if first == "sudo", words.count > 1 {
+            let next = clean(words[1])
+            return PermissionProgram(key: "shell:sudo \(next)",
+                                     label: "sudo \((next as NSString).lastPathComponent)")
+        }
+        return PermissionProgram(key: "shell:\(first)", label: (first as NSString).lastPathComponent)
+    }
+}
+
+/// Session-scoped "Allow always" rules; forgotten when the session ends.
+struct AlwaysAllowRules {
+    private var rules: [UUID: Set<String>] = [:]
+    mutating func allow(_ program: PermissionProgram, in session: UUID) { rules[session, default: []].insert(program.key) }
+    func allows(_ program: PermissionProgram, in session: UUID) -> Bool { rules[session]?.contains(program.key) == true }
+    mutating func forget(_ session: UUID) { rules[session] = nil }
 }

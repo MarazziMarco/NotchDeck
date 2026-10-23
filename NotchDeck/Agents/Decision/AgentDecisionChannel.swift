@@ -27,7 +27,7 @@ import Security
 enum DecisionVerb: String, Codable { case accept, deny }
 
 struct ResolutionScopeWire: Codable, Equatable {
-    let type: String            // "once" | "always"
+    let type: String            // "once" | "always" | "allPending"
     let pattern: String?
 }
 
@@ -46,6 +46,8 @@ struct AgentRequestWire: Codable {
     let detail: String
     let riskClass: String       // "low" | "medium" | "high"
     let expiresAtMs: Double
+    /// What "Allow always" would unlock (e.g. "python3"), for Arcus' label.
+    var program: String? = nil
 }
 
 /// The code-signing requirement NotchDeck pins to prove a decision came from the
@@ -65,8 +67,17 @@ enum PeerRequirement {
 
 /// Pure translation of a verified resolution into a bridge decision — testable.
 enum DecisionMapper {
-    static func bridgeDecision(from res: AgentResolutionWire) -> (requestID: String, allow: Bool) {
-        (requestID: res.id.uuidString, allow: res.decision == .accept)
+    enum Mode: Equatable { case once, alwaysThisSession, allPending }
+
+    static func bridgeDecision(from res: AgentResolutionWire) -> (requestID: String, allow: Bool, mode: Mode) {
+        let allow = res.decision == .accept
+        let mode: Mode
+        switch res.scope.type {
+        case "always" where allow: mode = .alwaysThisSession
+        case "allPending" where allow: mode = .allPending
+        default: mode = .once
+        }
+        return (requestID: res.id.uuidString, allow: allow, mode: mode)
     }
 }
 
@@ -118,7 +129,7 @@ private let kLOCAL_PEERTOKEN: Int32 = 0x006
 
 final class AgentDecisionSocket: @unchecked Sendable {
     private let requirement: String
-    private let onResolve: (_ requestID: String, _ allow: Bool) async -> Bool
+    private let onResolve: (_ requestID: String, _ allow: Bool, _ mode: DecisionMapper.Mode) async -> Bool
 
     private let stateLock = NSLock()
     private var running = false
@@ -133,7 +144,7 @@ final class AgentDecisionSocket: @unchecked Sendable {
     private let onFocus: (@Sendable (_ requestID: String) -> Void)?
 
     init(requirement: String = PeerRequirement.arcusSelfSigned,
-         onResolve: @escaping (_ requestID: String, _ allow: Bool) async -> Bool,
+         onResolve: @escaping (_ requestID: String, _ allow: Bool, _ mode: DecisionMapper.Mode) async -> Bool,
          onFocus: (@Sendable (_ requestID: String) -> Void)? = nil) {
         self.requirement = requirement
         self.onResolve = onResolve
@@ -225,9 +236,9 @@ final class AgentDecisionSocket: @unchecked Sendable {
             guard let payload = obj["payload"],
                   let pd = try? JSONSerialization.data(withJSONObject: payload),
                   let res = try? JSONDecoder().decode(AgentResolutionWire.self, from: pd) else { return }
-            let (requestID, allow) = DecisionMapper.bridgeDecision(from: res)
+            let (requestID, allow, mode) = DecisionMapper.bridgeDecision(from: res)
             Task { [weak self] in
-                let applied = await self?.onResolve(requestID, allow) ?? false
+                let applied = await self?.onResolve(requestID, allow, mode) ?? false
                 self?.writeFrame(["type": "ack", "id": res.id.uuidString,
                                   "status": applied ? "applied" : "rejected"], to: fd)
             }
