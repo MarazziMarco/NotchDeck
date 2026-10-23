@@ -64,7 +64,7 @@ enum HookInstaller {
     /// Bumped when only the helper binary changes (e.g. it now forwards the
     /// agent's question), so the installed copy is replaced at launch without
     /// marking the agents' hook configuration as stale.
-    static let helperRevision = 2
+    static let helperRevision = 3
     static let managedVersionKey = "notchdeckHookVersion"
 
     // MARK: Helper install

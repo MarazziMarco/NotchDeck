@@ -232,6 +232,9 @@ var event = TerminalAgentEvent(
     transactionID: transactionID,
     toolUseID: toolUseID,
     reason: parsedPermission?.reason)
+// Our own process chain, while we're alive: by the time the app reads this
+// event we have exited, and it couldn't tell which agent sent it.
+event.ancestors = TerminalAgentAncestry.capture(from: getpid())
 
 let fd = connectSocket()
 if fd < 0 {

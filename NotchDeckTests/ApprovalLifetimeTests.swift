@@ -750,3 +750,41 @@ final class HookOnlyCardFoldingTests: XCTestCase {
         XCTAssertNil(TerminalAgentBridge.foldHookOnlyCard(managed, into: processCard()))
     }
 }
+
+/// The hook helper exits as soon as it has sent an event, usually before the
+/// app looks at it — so the helper records its own process chain while alive.
+final class HookAncestryTests: XCTestCase {
+    func testTheHelperCapturesItsOwnChain() throws {
+        let chain = TerminalAgentAncestry.capture(from: getpid())
+        XCTAssertEqual(chain.first?.pid, getpid())
+        XCTAssertTrue(chain.allSatisfy { $0.startSeconds > 0 })
+        // The chain climbs to the parent unless that is launchd (an app host's
+        // parent); a hook helper's parent is the agent's shell, never launchd.
+        if getppid() > 1 { XCTAssertEqual(chain.dropFirst().first?.pid, getppid()) }
+        else { XCTAssertEqual(chain.count, 1) }
+    }
+
+    func testTheChainTravelsInTheEventAndOldEventsStillDecode() throws {
+        var event = TerminalAgentEvent(type: .toolStarted, provider: .claudeCode, sessionID: "S", timestamp: 1)
+        event.ancestors = [TerminalAgentAncestor(pid: 10, startSeconds: 100, startMicroseconds: 5)]
+        let back = try JSONDecoder().decode(TerminalAgentEvent.self, from: JSONEncoder().encode(event))
+        XCTAssertEqual(back.ancestors, event.ancestors)
+        let old = #"{"protocolVersion":1,"type":"toolStarted","provider":"claudeCode","sessionID":"S","timestamp":1}"#
+        XCTAssertNil(try JSONDecoder().decode(TerminalAgentEvent.self, from: Data(old.utf8)).ancestors)
+    }
+
+    func testTheAppPrefersTheChainTheHelperSent() {
+        var event = TerminalAgentEvent(type: .toolStarted, provider: .claudeCode, sessionID: "S", timestamp: 1, pid: 99)
+        event.ancestors = [TerminalAgentAncestor(pid: 99, startSeconds: 1, startMicroseconds: 0),
+                           TerminalAgentAncestor(pid: 42, startSeconds: 7, startMicroseconds: 3)]
+        let ids = TerminalAgentBridge.ancestry(for: event) { _ in [] }
+        XCTAssertEqual(ids.map(\.pid), [99, 42])
+        XCTAssertEqual(ids.last, AgentProcessIdentity(pid: 42, startSeconds: 7, startMicroseconds: 3))
+    }
+
+    func testOldHelpersFallBackToTheLiveWalk() {
+        let event = TerminalAgentEvent(type: .toolStarted, provider: .claudeCode, sessionID: "S", timestamp: 1, pid: 99)
+        let live = [AgentProcessIdentity(pid: 99, startSeconds: 1, startMicroseconds: 0)]
+        XCTAssertEqual(TerminalAgentBridge.ancestry(for: event) { $0 == 99 ? live : [] }, live)
+    }
+}

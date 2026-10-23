@@ -515,7 +515,7 @@ actor TerminalAgentBridge {
             stats.recordObservedProvider(event.provider)
         }
         let currentSessions = await MainActor.run { [store] in store.sessions }
-        let ancestry = event.pid.map { MacProcessAncestry.identities(from: $0) } ?? []
+        let ancestry = Self.ancestry(for: event) { MacProcessAncestry.identities(from: $0) }
         let correlation = AgentHookProcessCorrelator.match(
             provider: providerKind,
             ancestorIdentities: ancestry,
@@ -671,6 +671,17 @@ actor TerminalAgentBridge {
                                   connected: all.filter { $0.connectivity == .connected }.count,
                                   external: all.filter { $0.connectivity == .external }.count)
         }
+    }
+
+    /// The event's process chain: the one the helper captured while alive, or —
+    /// for older helpers — a live walk from its PID (often empty: it has exited).
+    static func ancestry(for event: TerminalAgentEvent,
+                         live: (Int32) -> [AgentProcessIdentity]) -> [AgentProcessIdentity] {
+        if let chain = event.ancestors, !chain.isEmpty {
+            return chain.map { AgentProcessIdentity(pid: $0.pid, startSeconds: $0.startSeconds,
+                                                    startMicroseconds: $0.startMicroseconds) }
+        }
+        return event.pid.map(live) ?? []
     }
 
     /// Fold a hook-only card (made before the agent's process was discovered)
