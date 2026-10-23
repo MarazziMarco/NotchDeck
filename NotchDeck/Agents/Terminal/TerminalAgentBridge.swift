@@ -529,8 +529,28 @@ actor TerminalAgentBridge {
             correlation: correlation?.confidence
         )
         let sessionKey = "\(event.provider.rawValue):\(event.sessionID)"
-        let uuid = correlation?.sessionID ?? sessionIDs[sessionKey] ?? UUID()
+        let previousID = sessionIDs[sessionKey]
+        let uuid = correlation?.sessionID ?? previousID ?? UUID()
         sessionIDs[sessionKey] = uuid
+        // Hooks that arrived before the agent's process was found made a
+        // hook-only card; now that they're matched to the real session, fold
+        // that card into it instead of leaving a second "Active" session.
+        if let previousID, previousID != uuid {
+            await MainActor.run { [store] in
+                guard let orphan = store.session(id: previousID),
+                      let target = store.session(id: uuid),
+                      let merged = Self.foldHookOnlyCard(orphan, into: target) else { return }
+                store.upsert(merged)
+                store.remove(id: previousID)
+            }
+            for (transactionID, connection) in pendingApprovals where connection.appSessionID == previousID {
+                pendingApprovals[transactionID] = PendingApprovalConnection(
+                    clientFD: connection.clientFD,
+                    providerRequestID: connection.providerRequestID,
+                    appSessionID: uuid,
+                    actionableUntil: connection.actionableUntil)
+            }
+        }
         lastSeen[uuid] = Date()
 
         // PermissionRequest is the provider-specific synchronous decision
@@ -651,6 +671,35 @@ actor TerminalAgentBridge {
                                   connected: all.filter { $0.connectivity == .connected }.count,
                                   external: all.filter { $0.connectivity == .external }.count)
         }
+    }
+
+    /// Fold a hook-only card (made before the agent's process was discovered)
+    /// into the process-backed session the hooks now resolve to. Nil when the
+    /// card is not hook-only (it has its own process, or NotchDeck launched it)
+    /// or belongs to another agent — those are real, separate sessions.
+    static func foldHookOnlyCard(_ orphan: AgentSession, into target: AgentSession) -> AgentSession? {
+        guard orphan.processIdentity == nil, !orphan.isManaged, orphan.provider == target.provider,
+              orphan.id != target.id else { return nil }
+        var merged = target
+        merged.isBridgeConnected = merged.isBridgeConnected || orphan.isBridgeConnected
+        merged.providerSessionID = merged.providerSessionID ?? orphan.providerSessionID
+        if orphan.lastActivityAt > merged.lastActivityAt {
+            merged.lastActivityAt = orphan.lastActivityAt
+            merged.latestSummary = orphan.latestSummary ?? merged.latestSummary
+            merged.status = orphan.status
+        }
+        if merged.approval == nil, orphan.approval != nil {
+            merged.approval = orphan.approval
+            merged.queuedApprovals = orphan.queuedApprovals
+            merged.pendingApprovalRequestID = orphan.pendingApprovalRequestID
+            merged.requiresAttention = orphan.requiresAttention
+        }
+        merged.terminalTTY = merged.terminalTTY ?? orphan.terminalTTY
+        merged.terminalAppName = merged.terminalAppName ?? orphan.terminalAppName
+        merged.terminalBundleID = merged.terminalBundleID ?? orphan.terminalBundleID
+        merged.termSessionID = merged.termSessionID ?? orphan.termSessionID
+        merged.shellPID = merged.shellPID ?? orphan.shellPID
+        return merged
     }
 
     /// Pure reduction of a bridge event onto a session — unit-testable. Strictly

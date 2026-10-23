@@ -692,3 +692,61 @@ final class AgentRequestClarityTests: XCTestCase {
                        "OUTCOME tx=12345678 answered allow")
     }
 }
+
+
+/// A card made from hooks before the agent's process was found must not stay
+/// behind as a second "Active" session once the hooks are matched to it.
+final class HookOnlyCardFoldingTests: XCTestCase {
+    private let t0 = Date(timeIntervalSince1970: 4_000_000)
+
+    private func hookOnly(_ provider: AgentProviderKind = .codex) -> AgentSession {
+        var s = AgentSession(id: UUID(), provider: provider, providerSessionID: "provider-session",
+                             title: "LaunchMe", projectPath: "/Users/me/LaunchMe", status: .running,
+                             isManaged: false)
+        s.isBridgeConnected = true
+        s.latestSummary = "Using Bash"
+        s.lastActivityAt = t0.addingTimeInterval(5)
+        return s
+    }
+
+    private func processCard(_ provider: AgentProviderKind = .codex) -> AgentSession {
+        var s = AgentSession(id: UUID(), provider: provider, providerSessionID: nil,
+                             title: "LaunchMe", projectPath: "/Users/me/LaunchMe", status: .running,
+                             isManaged: false)
+        s.processIdentity = AgentProcessIdentity(pid: 42, startSeconds: 1, startMicroseconds: 0)
+        s.lastActivityAt = t0
+        return s
+    }
+
+    func testAHookOnlyCardFoldsIntoTheRealSession() throws {
+        let merged = try XCTUnwrap(TerminalAgentBridge.foldHookOnlyCard(hookOnly(), into: processCard()))
+        XCTAssertNotNil(merged.processIdentity)
+        XCTAssertEqual(merged.providerSessionID, "provider-session")
+        XCTAssertEqual(merged.latestSummary, "Using Bash")                 // newer activity wins
+        XCTAssertTrue(merged.isBridgeConnected)
+    }
+
+    func testAPendingRequestMovesWithIt() throws {
+        var orphan = hookOnly()
+        orphan.approval = PendingApproval(
+            provider: .codex, sessionID: "provider-session", requestID: "T", providerRequestID: "R",
+            toolUseID: nil, turnID: "t", rawEventName: "PermissionRequest", toolName: "Bash",
+            summary: "ls", receivedAt: t0, expiresAt: t0.addingTimeInterval(60), state: .pending,
+            handlingMode: .notchWithTerminalFallback, fallbackDeadline: t0.addingTimeInterval(60),
+            nativePromptExpected: true)
+        orphan.pendingApprovalRequestID = "T"
+        let merged = try XCTUnwrap(TerminalAgentBridge.foldHookOnlyCard(orphan, into: processCard()))
+        XCTAssertEqual(merged.approval?.requestID, "T")
+        XCTAssertEqual(merged.pendingApprovalRequestID, "T")
+    }
+
+    func testOnlyHookOnlyCardsOfTheSameAgentFold() {
+        var tracked = hookOnly()
+        tracked.processIdentity = AgentProcessIdentity(pid: 7, startSeconds: 1, startMicroseconds: 0)
+        XCTAssertNil(TerminalAgentBridge.foldHookOnlyCard(tracked, into: processCard()))
+        XCTAssertNil(TerminalAgentBridge.foldHookOnlyCard(hookOnly(.claudeCode), into: processCard(.codex)))
+        var managed = hookOnly()
+        managed.isManaged = true
+        XCTAssertNil(TerminalAgentBridge.foldHookOnlyCard(managed, into: processCard()))
+    }
+}
