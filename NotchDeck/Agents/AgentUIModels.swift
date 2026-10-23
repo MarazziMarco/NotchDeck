@@ -591,6 +591,8 @@ struct PendingApproval: Equatable, Codable {
     /// `.sending`) so the delivery acknowledgement can apply the correct session
     /// status only after real delivery — never on the click alone.
     var decidedAllow: Bool? = nil
+    /// The agent's own question/reason for this request, when it gave one.
+    var reason: String? = nil
 
     var isLive: Bool { state == .pending }
     var actionDeadline: Date { fallbackDeadline ?? expiresAt }
@@ -682,12 +684,16 @@ enum ApprovalPeekQueue {
         return ApprovalPeekQueueSnapshot(items: unique)
     }
 
+    /// Only requests still waiting for someone. Once a decision is on its way
+    /// (`sending`/`sent`/…), the strip lets it go at once instead of lingering
+    /// with "Respond in Terminal" until the agent finishes the whole command.
+    /// A failed delivery or a release to Terminal comes back as visible.
     private static func isPresentable(_ state: PendingApproval.ResponseState) -> Bool {
         switch state {
-        case .pending, .sending, .sent, .providerOutputClosed, .helperTerminated,
-             .helperExited, .deliveryFailed, .fellBack, .expired:
+        case .pending, .deliveryFailed, .fellBack, .expired:
             return true
-        case .delivered, .cancelled, .answered:
+        case .sending, .sent, .providerOutputClosed, .helperTerminated, .helperExited,
+             .delivered, .cancelled, .answered:
             return false
         }
     }
@@ -758,6 +764,8 @@ struct ApprovalPeekPresentation: Equatable {
     let projectName: String
     let toolName: String
     let actionSummary: String
+    /// The agent's own question ("Posso compilare…?"), shown first when present.
+    let question: String?
     let queueText: String?
     let groupAccessibilityLabel: String
     let allowAccessibilityLabel: String
@@ -780,10 +788,12 @@ struct ApprovalPeekPresentation: Equatable {
         toolName = item.approval.toolName?.isEmpty == false
             ? item.approval.toolName! : "Action"
         actionSummary = item.approval.summary
+        question = item.approval.reason
         queueText = totalCount > 1 ? "1/\(totalCount)" : nil
         let position = totalCount > 1 ? ", request 1 of \(totalCount)" : ""
+        let asks = question.map { " — \($0)" } ?? ""
         groupAccessibilityLabel =
-            "\(providerName) approval for \(projectName): \(toolName), \(actionSummary)\(position)"
+            "\(providerName) approval for \(projectName)\(asks): \(toolName), \(actionSummary)\(position)"
         allowAccessibilityLabel =
             "Allow \(providerName) to perform \(actionSummary)"
         denyAccessibilityLabel =

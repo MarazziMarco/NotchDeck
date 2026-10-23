@@ -98,3 +98,65 @@ final class AgentApprovalDiagnostics: @unchecked Sendable {
         #endif
     }
 }
+
+/// A readable trail of agent permission requests at
+/// ~/Library/Logs/NotchDeck/agent-requests.log: who asked (agent + folder name),
+/// the agent's own question, the action (sanitized, shortened) and how it ended
+/// (answered here, released to the terminal, or the agent stopped waiting).
+/// Lets a request that looks "phantom" be checked against the agent's own logs.
+/// Never stores full paths, environment, or secrets (sanitized like the UI).
+enum ApprovalLog {
+    static let maxBytes = 256 * 1024
+    private static let queue = DispatchQueue(label: "notchdeck.approval-log", qos: .utility)
+
+    static var url: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/NotchDeck/agent-requests.log")
+    }
+
+    static func requestLine(transactionID: String, provider: AgentProviderKind, projectPath: String,
+                            toolName: String?, reason: String?, action: String) -> String {
+        let name: String
+        switch provider {
+        case .claudeCode: name = "Claude Code"
+        case .codex: name = "Codex"
+        case .external: name = "Agent"
+        }
+        let project = URL(fileURLWithPath: projectPath).lastPathComponent
+        let who = projectPath.isEmpty || project.isEmpty ? name : "\(name) · \(project)"
+        var line = "REQUEST tx=\(transactionID.prefix(8)) \(who) tool=\(toolName ?? "?")"
+        if let reason, !reason.isEmpty { line += " \"\(reason)\"" }
+        let shortAction = action.count > 120 ? String(action.prefix(119)) + "…" : action
+        line += " action: \(shortAction)"
+        return line
+    }
+
+    static func outcomeLine(transactionID: String, outcome: String) -> String {
+        "OUTCOME tx=\(transactionID.prefix(8)) \(outcome)"
+    }
+
+    static func write(_ line: String) {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return }
+        #endif
+        let stamp = Date()
+        queue.async {
+            let f = DateFormatter()
+            f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            let entry = "\(f.string(from: stamp)) \(line)\n"
+            let u = url
+            try? FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if let size = try? FileManager.default.attributesOfItem(atPath: u.path)[.size] as? Int,
+               size > maxBytes, let data = try? Data(contentsOf: u) {
+                try? data.suffix(maxBytes / 2).write(to: u, options: [.atomic])
+            }
+            if let handle = try? FileHandle(forWritingTo: u) {
+                handle.seekToEndOfFile()
+                handle.write(Data(entry.utf8))
+                try? handle.close()
+            } else {
+                try? entry.write(to: u, atomically: true, encoding: .utf8)
+            }
+        }
+    }
+}

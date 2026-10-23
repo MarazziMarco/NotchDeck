@@ -148,6 +148,9 @@ public struct TerminalAgentEvent: Codable, Equatable {
     public var terminalBundleID: String?
     public var termSessionID: String?
     public var shellPID: Int32?
+    /// The agent's own human-readable reason for a permission request
+    /// (`tool_input.description`, e.g. Codex's "Posso compilare…?"), sanitized.
+    public var reason: String?
 
     public init(type: TerminalAgentEventType,
                 provider: TerminalAgentProvider,
@@ -169,7 +172,8 @@ public struct TerminalAgentEvent: Codable, Equatable {
                 transcriptPath: String? = nil,
                 terminalBundleID: String? = nil,
                 termSessionID: String? = nil,
-                shellPID: Int32? = nil) {
+                shellPID: Int32? = nil,
+                reason: String? = nil) {
         self.protocolVersion = TerminalAgentProtocol.version
         self.type = type
         self.provider = provider
@@ -192,6 +196,7 @@ public struct TerminalAgentEvent: Codable, Equatable {
         self.terminalBundleID = terminalBundleID
         self.termSessionID = termSessionID
         self.shellPID = shellPID
+        self.reason = reason
     }
 }
 
@@ -230,6 +235,8 @@ public struct AgentPermissionRequest: Equatable {
     public let cwd: String?
     public let requestID: String
     public let summary: String
+    /// The agent's own question/reason, when the payload carries one.
+    public let reason: String?
 }
 
 public enum AgentPermissionAdapterError: Error, Equatable {
@@ -284,6 +291,16 @@ private enum PermissionPayload {
 /// string crosses into the shared event/store model.
 public enum PermissionActionSummary {
     public static let maxCharacters = 400
+    public static let maxReasonCharacters = 200
+
+    /// The agent's human-readable reason (`tool_input.description`): Codex puts
+    /// its approval question there, Claude its Bash command description.
+    public static func reason(from toolInput: Any?) -> String? {
+        guard let raw = (toolInput as? [String: Any])?["description"] as? String else { return nil }
+        let text = sanitize(raw)
+        guard !text.isEmpty else { return nil }
+        return text.count > maxReasonCharacters ? String(text.prefix(maxReasonCharacters - 1)) + "…" : text
+    }
 
     public static func resolve(toolName: String?, toolInput: Any?) -> String {
         let tool = toolName?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -464,7 +481,8 @@ public struct ClaudePermissionAdapter: AgentPermissionProvider {
             summary: PermissionActionSummary.resolve(
                 toolName: tool,
                 toolInput: payload["tool_input"]
-            )
+            ),
+            reason: PermissionActionSummary.reason(from: payload["tool_input"])
         )
     }
 
@@ -515,7 +533,8 @@ public struct CodexPermissionAdapter: AgentPermissionProvider {
             summary: PermissionActionSummary.resolve(
                 toolName: tool,
                 toolInput: payload["tool_input"]
-            )
+            ),
+            reason: PermissionActionSummary.reason(from: payload["tool_input"])
         )
     }
 

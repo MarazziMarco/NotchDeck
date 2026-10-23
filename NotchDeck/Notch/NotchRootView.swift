@@ -150,13 +150,24 @@ struct ApprovalPeekView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
+                    // The agent's own question first ("Posso compilare…?"), then the
+                    // exact action — so it's clear who asks what, and why.
+                    if let question = presentation.question {
+                        Text(question)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(DesignTokens.Palette.primaryText)
+                            .lineLimit(peek.isHovering ? 3 : 1)
+                            .truncationMode(.tail)
+                    }
                     Text(presentation.actionSummary)
                         .font(.system(
-                            size: 11,
+                            size: presentation.question == nil ? 11 : 10,
                             weight: .medium,
                             design: presentation.isCommand ? .monospaced : .default
                         ))
-                        .foregroundStyle(DesignTokens.Palette.primaryText)
+                        .foregroundStyle(presentation.question == nil
+                                         ? DesignTokens.Palette.primaryText
+                                         : DesignTokens.Palette.secondaryText)
                         .lineLimit(peek.isHovering ? 3 : 1)
                         .truncationMode(.middle)
                     if peek.isHovering {

@@ -557,3 +557,138 @@ final class ApprovalPeekQueueTests: XCTestCase {
         XCTAssertNil(ApprovalPeekQueue.resolve(sessions: [ended]).visible)
     }
 }
+
+/// Agent requests must say who asks and why, vanish once answered, and leave a
+/// readable trail (so a request that looks "phantom" can be checked).
+final class AgentRequestClarityTests: XCTestCase {
+    private let t0 = Date(timeIntervalSince1970: 3_000_000)
+
+    // MARK: the agent's own question (tool_input.description)
+
+    func testCodexEscalationCarriesItsQuestion() throws {
+        let request = try CodexPermissionAdapter().parse([
+            "session_id": "codex-session", "turn_id": "t1", "hook_event_name": "PermissionRequest",
+            "cwd": "/Users/me/LaunchMe", "tool_name": "Bash",
+            "tool_input": ["command": "/private/tmp/preview",
+                           "description": "Posso generare le immagini di anteprima dei widget?"],
+        ])
+        XCTAssertEqual(request.reason, "Posso generare le immagini di anteprima dei widget?")
+        XCTAssertEqual(request.summary, "/private/tmp/preview")
+    }
+
+    func testClaudeBashDescriptionIsItsReason() throws {
+        let request = try ClaudePermissionAdapter().parse([
+            "session_id": "s", "hook_event_name": "PermissionRequest", "tool_name": "Bash",
+            "tool_input": ["command": "rm -rf build", "description": "Clean the build folder"],
+        ])
+        XCTAssertEqual(request.reason, "Clean the build folder")
+    }
+
+    func testNoDescriptionMeansNoReasonAndSecretsAreRedacted() throws {
+        let plain = try ClaudePermissionAdapter().parse([
+            "session_id": "s", "hook_event_name": "PermissionRequest", "tool_name": "Bash",
+            "tool_input": ["command": "ls"],
+        ])
+        XCTAssertNil(plain.reason)
+        let secret = try ClaudePermissionAdapter().parse([
+            "session_id": "s", "hook_event_name": "PermissionRequest", "tool_name": "Bash",
+            "tool_input": ["command": "curl x", "description": "Call it with token=abcdef123456"],
+        ])
+        XCTAssertFalse(secret.reason?.contains("abcdef123456") ?? true)
+    }
+
+    func testTheReasonTravelsInTheEventAndOldEventsStillDecode() throws {
+        var event = TerminalAgentEvent(type: .permissionRequested, provider: .codex, sessionID: "S",
+                                       timestamp: 1, requestID: "R", transactionID: "T")
+        event.reason = "Posso compilare?"
+        let back = try JSONDecoder().decode(TerminalAgentEvent.self, from: JSONEncoder().encode(event))
+        XCTAssertEqual(back.reason, "Posso compilare?")
+
+        let old = #"{"protocolVersion":1,"type":"permissionRequested","provider":"codex","sessionID":"S","timestamp":1}"#
+        XCTAssertNil(try JSONDecoder().decode(TerminalAgentEvent.self, from: Data(old.utf8)).reason)
+    }
+
+    func testTheApprovalKeepsTheReason() {
+        var event = TerminalAgentEvent(type: .permissionRequested, provider: .codex, sessionID: "S",
+                                       cwd: "/Users/me/LaunchMe", timestamp: 3_000_000,
+                                       requestID: "R", transactionID: "T")
+        event.reason = "Posso compilare?"
+        let s = TerminalAgentBridge.reduce(existing: nil, id: UUID(), event: event, now: t0)
+        XCTAssertEqual(s.approval?.reason, "Posso compilare?")
+    }
+
+    // MARK: answered requests leave the strip at once
+
+    private func approval(_ id: String, state: PendingApproval.ResponseState, reason: String? = nil) -> PendingApproval {
+        var a = PendingApproval(
+            provider: .codex, sessionID: "provider-session", requestID: id, providerRequestID: "native-\(id)",
+            toolUseID: nil, turnID: "t", rawEventName: "PermissionRequest", toolName: "Bash",
+            summary: "/private/tmp/preview", receivedAt: t0, expiresAt: t0.addingTimeInterval(60),
+            state: state, handlingMode: .notchWithTerminalFallback,
+            fallbackDeadline: t0.addingTimeInterval(60), nativePromptExpected: true)
+        a.reason = reason
+        return a
+    }
+
+    private func session(_ approval: PendingApproval) -> AgentSession {
+        AgentSession(id: UUID(), provider: .codex, providerSessionID: "provider-session", title: "LaunchMe",
+                     projectPath: "/Users/me/LaunchMe", status: .waitingForApproval, isManaged: false,
+                     isBridgeConnected: true, pendingApprovalRequestID: approval.requestID, approval: approval)
+    }
+
+    func testAnsweredRequestsAreNotShownAnyMore() {
+        for state in [PendingApproval.ResponseState.sending, .sent, .providerOutputClosed,
+                      .helperTerminated, .helperExited] {
+            XCTAssertNil(ApprovalPeekQueue.resolve(sessions: [session(approval("A", state: state))]).visible,
+                         "\(state) should not stay in the strip")
+        }
+    }
+
+    func testUnansweredOrFailedRequestsAreStillShown() {
+        for state in [PendingApproval.ResponseState.pending, .deliveryFailed, .fellBack, .expired] {
+            XCTAssertNotNil(ApprovalPeekQueue.resolve(sessions: [session(approval("A", state: state))]).visible,
+                            "\(state) should stay visible")
+        }
+    }
+
+    // MARK: who asks, and why
+
+    func testTheStripShowsTheQuestion() throws {
+        let item = try XCTUnwrap(ApprovalPeekQueue.resolve(
+            sessions: [session(approval("A", state: .pending, reason: "Posso compilare?"))]).visible)
+        let p = ApprovalPeekPresentation(item: item, totalCount: 1)
+        XCTAssertEqual(p.question, "Posso compilare?")
+        XCTAssertEqual(p.actionSummary, "/private/tmp/preview")
+        XCTAssertEqual(p.projectName, "LaunchMe")
+        XCTAssertTrue(p.groupAccessibilityLabel.contains("Posso compilare?"))
+    }
+
+    func testArcusIsToldWhoAsksWhatAndWhy() {
+        let r = ExternalPendingRequest.describe(provider: .codex, projectPath: "/Users/me/LaunchMe",
+                                                reason: "Posso compilare?", action: "swiftc main.swift",
+                                                toolName: "Bash")
+        XCTAssertEqual(r.agent, "Codex · LaunchMe")
+        XCTAssertEqual(r.summary, "Posso compilare?")
+        XCTAssertEqual(r.detail, "swiftc main.swift")
+        let noReason = ExternalPendingRequest.describe(provider: .claudeCode, projectPath: "",
+                                                       reason: nil, action: "ls", toolName: "Bash")
+        XCTAssertEqual(noReason.agent, "Claude Code")
+        XCTAssertEqual(noReason.summary, "ls")
+        XCTAssertEqual(noReason.detail, "Bash")
+    }
+
+    // MARK: the request trail
+
+    func testRequestLogLinesNameAgentFolderAndQuestionButNoFullPath() {
+        let line = ApprovalLog.requestLine(transactionID: "1234567890abcdef", provider: .codex,
+                                           projectPath: "/Users/me/Desktop/LaunchMe", toolName: "Bash",
+                                           reason: "Posso compilare?", action: "swiftc main.swift")
+        XCTAssertTrue(line.hasPrefix("REQUEST tx=12345678 Codex · LaunchMe"), line)
+        XCTAssertTrue(line.contains("tool=Bash"))
+        XCTAssertTrue(line.contains("\"Posso compilare?\""))
+        XCTAssertTrue(line.contains("swiftc main.swift"))
+        XCTAssertFalse(line.contains("/Users/me"))
+        XCTAssertEqual(ApprovalLog.outcomeLine(transactionID: "1234567890abcdef", outcome: "answered allow"),
+                       "OUTCOME tx=12345678 answered allow")
+    }
+}
