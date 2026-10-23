@@ -7,9 +7,18 @@ options:
   groupSortPosition: top
   generateEmptyDirectories: true
 
+# ActionKit (product of the local "Arcus" package, directory name "app") is
+# the shared action schema also consumed by Arcus and LaunchPad — see
+# docs/superpowers/specs/2026-10-11-app-integration-design.md §2/§4 in the
+# LaunchMe repo. Its path is relative to this file and resolves as-is from the
+# main checkout (sibling "RadialMenu/app" under "Mac apps"). A git worktree
+# under .worktrees/ is one level deeper; create one untracked symlink there
+# before `xcodegen generate`:  ln -s ../../RadialMenu .worktrees/RadialMenu
 packages:
   SharedWidgets:
     path: Packages/SharedWidgets
+  ActionKit:
+    path: ../RadialMenu/app
 
 settings:
   base:
@@ -36,6 +45,8 @@ targets:
     resources: []
     dependencies:
       - package: SharedWidgets
+      - package: ActionKit
+        product: ActionKit
       - target: notchdeck-agent-hook
         embed: true
         codeSign: true
@@ -88,6 +99,13 @@ targets:
     sources:
       - NotchDeckTests
     dependencies:
+      # No direct ActionKit dependency: `@testable import NotchDeck` is
+      # enough since LaunchPadPresenceBridgeTests uses NotchDeck's own
+      # LaunchPadPresenceBridge.didShow/.didHide passthroughs instead of
+      # importing ActionKit directly. NotchDeckTests is a *hosted* bundle
+      # (launches NotchDeck.app); also linking ActionKit's package product
+      # here risks it being loaded twice in the same process (once via the
+      # host app, once via the test bundle) and duplicate-class warnings.
       - target: NotchDeck
     settings:
       base:
