@@ -193,6 +193,25 @@ final class AgentProcessDiscoveryTests: XCTestCase {
         ), .nativeCodex)
     }
 
+    func testCodexSandboxHelpersAreNotAgentSessions() {
+        // ChatGPT/Codex run tools inside `codex sandbox …` helpers that live in the
+        // agent's folder and inherit its terminal; they are not sessions.
+        let path = "/Applications/ChatGPT.app/Contents/Resources/codex"
+        XCTAssertNil(AgentProviderClassifier.classify(
+            executablePath: path,
+            arguments: [path, "sandbox", "-c", "shell_environment_policy.inherit=\"all\"",
+                        "-c", "default_permissions=\"node_repl\"", "--", "node_repl"]
+        ))
+        XCTAssertNil(AgentProviderClassifier.classify(
+            executablePath: "/opt/codex",
+            arguments: ["codex", "debug", "seatbelt", "--", "ls"]
+        ))
+        XCTAssertEqual(AgentProviderClassifier.classify(
+            executablePath: "/opt/codex",
+            arguments: ["codex"]
+        ), .nativeCodex)
+    }
+
     func testPIDAndExactStartTimeFormIdentity() {
         let a = AgentProcessIdentity(pid: 7, startSeconds: 10, startMicroseconds: 1)
         let same = AgentProcessIdentity(pid: 7, startSeconds: 10, startMicroseconds: 1)

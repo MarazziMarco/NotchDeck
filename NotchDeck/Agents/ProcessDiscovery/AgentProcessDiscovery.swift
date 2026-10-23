@@ -168,6 +168,11 @@ enum AgentProviderClassifier {
                 "completion",
                 "login",
                 "logout",
+                // Tool sandboxes (`codex sandbox …`, spawned by ChatGPT/Codex for
+                // their REPL and computer-use tools) and debug helpers run in the
+                // agent's folder and terminal but are not sessions.
+                "sandbox",
+                "debug",
             ].contains(argument.lowercased())
         }
         return false
