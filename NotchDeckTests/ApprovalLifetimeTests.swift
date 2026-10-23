@@ -811,3 +811,19 @@ final class PeekSteadyHoverTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(PeekMarquee.duration(travel: 5), PeekMarquee.minimumDuration)
     }
 }
+
+/// Arcus is told when a request it was shown is settled elsewhere (notch,
+/// terminal, agent gone), so it never keeps offering Accept/Deny.
+final class ExternalWithdrawTests: XCTestCase {
+    func testWithdrawFrame() {
+        let id = UUID()
+        let frame = AgentDecisionSocket.withdrawFrame(id: id)
+        XCTAssertEqual(frame["type"] as? String, "withdraw")
+        XCTAssertEqual(frame["id"] as? String, id.uuidString)
+    }
+
+    func testOnlyUUIDTransactionsAreWithdrawn() {
+        XCTAssertNil(AgentDecisionSocket.withdrawFrame(transactionID: "not-a-uuid"))
+        XCTAssertNotNil(AgentDecisionSocket.withdrawFrame(transactionID: UUID().uuidString))
+    }
+}

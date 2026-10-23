@@ -328,6 +328,13 @@ actor TerminalAgentBridge {
     /// Optional sink: pushes a presented permission request to an external verified
     /// responder (the Arcus decision channel). Additive; nil = no external peer.
     private var externalNotify: (@Sendable (ExternalPendingRequest) -> Void)?
+    /// Called when a transaction leaves the pending state by any route, so an
+    /// external responder (Arcus) stops offering it. Defaults to the running
+    /// decision service; tests may replace it.
+    private var externalWithdraw: (@Sendable (String) -> Void)? = { transactionID in
+        AgentDecisionSocket.current?.withdraw(transactionID: transactionID)
+    }
+    func setExternalWithdraw(_ cb: @escaping @Sendable (String) -> Void) { externalWithdraw = cb }
     func setExternalNotify(_ cb: @escaping @Sendable (ExternalPendingRequest) -> Void) {
         externalNotify = cb
     }
@@ -485,6 +492,7 @@ actor TerminalAgentBridge {
         }
         for (transactionID, connection) in disconnected {
             pendingApprovals[transactionID] = nil
+            externalWithdraw?(transactionID)
             // The helper went away while still waiting: the agent stopped asking
             // (answered in its terminal, interrupted, or decided by itself).
             ApprovalLog.write(ApprovalLog.outcomeLine(transactionID: transactionID,
@@ -1035,11 +1043,13 @@ actor TerminalAgentBridge {
         guard let data = TerminalAgentCodec.encodeLine(decision),
               writeAll(data, to: connection.clientFD) else {
             pendingApprovals[requestID] = nil
+            externalWithdraw?(requestID)
             ApprovalLog.write(ApprovalLog.outcomeLine(transactionID: requestID,
                                                       outcome: "answer not delivered (agent no longer waiting)"))
             return false
         }
         pendingApprovals[requestID] = nil
+        externalWithdraw?(requestID)
         ApprovalLog.write(ApprovalLog.outcomeLine(transactionID: requestID,
                                                   outcome: "answered \(allow ? "allow" : "deny") in NotchDeck/Arcus"))
         return true
@@ -1062,6 +1072,7 @@ actor TerminalAgentBridge {
             return false
         }
         pendingApprovals[requestID] = nil
+        externalWithdraw?(requestID)
         ApprovalLog.write(ApprovalLog.outcomeLine(transactionID: requestID,
                                                   outcome: "released to the terminal (not answered in NotchDeck)"))
         return true
