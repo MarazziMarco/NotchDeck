@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Versioned JSONL protocol spoken over the local Unix-domain socket between the
 /// `notchdeck-agent-hook` helper and NotchDeck's `TerminalAgentBridge`.
@@ -151,6 +152,10 @@ public struct TerminalAgentEvent: Codable, Equatable {
     /// The agent's own human-readable reason for a permission request
     /// (`tool_input.description`, e.g. Codex's "Posso compilare…?"), sanitized.
     public var reason: String?
+    /// The helper's own process chain (itself first), captured while it is
+    /// alive: it usually exits before the app reads the event, so a later walk
+    /// from its PID finds nothing and the event can't be tied to its agent.
+    public var ancestors: [TerminalAgentAncestor]?
 
     public init(type: TerminalAgentEventType,
                 provider: TerminalAgentProvider,
@@ -197,6 +202,35 @@ public struct TerminalAgentEvent: Codable, Equatable {
         self.termSessionID = termSessionID
         self.shellPID = shellPID
         self.reason = reason
+    }
+}
+
+/// One process of the helper's chain: PID plus exact start time (PIDs are reused).
+public struct TerminalAgentAncestor: Codable, Equatable {
+    public let pid: Int32
+    public let startSeconds: UInt64
+    public let startMicroseconds: UInt64
+    public init(pid: Int32, startSeconds: UInt64, startMicroseconds: UInt64) {
+        self.pid = pid; self.startSeconds = startSeconds; self.startMicroseconds = startMicroseconds
+    }
+}
+
+public enum TerminalAgentAncestry {
+    /// The chain from `pid` up to (not including) launchd, at most `maxDepth`.
+    public static func capture(from pid: Int32, maxDepth: Int = 16) -> [TerminalAgentAncestor] {
+        var chain: [TerminalAgentAncestor] = []
+        var current = pid
+        while current > 1, chain.count < maxDepth {
+            var info = proc_bsdinfo()
+            let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+            guard proc_pidinfo(current, PROC_PIDTBSDINFO, 0, &info, size) == size else { break }
+            chain.append(TerminalAgentAncestor(pid: current, startSeconds: UInt64(info.pbi_start_tvsec),
+                                               startMicroseconds: UInt64(info.pbi_start_tvusec)))
+            let parent = Int32(bitPattern: info.pbi_ppid)
+            if parent == current { break }
+            current = parent
+        }
+        return chain
     }
 }
 
