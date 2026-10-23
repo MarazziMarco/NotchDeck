@@ -842,3 +842,24 @@ final class PeekMarqueeLoopTests: XCTestCase {
         XCTAssertEqual(PeekMarquee.offset(at: 5, travel: 0), 0)
     }
 }
+
+/// Tests must never write into the user's real NotchDeck folder, and hook
+/// installs keep only a few config backups.
+final class HousekeepingTests: XCTestCase {
+    func testTestsUseATemporaryFolder() {
+        let real = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let dir = AppPaths.supportDirectory.standardizedFileURL.path
+        XCTAssertFalse(dir.hasPrefix(real.standardizedFileURL.path), dir)
+        XCTAssertTrue(dir.hasSuffix("/NotchDeck"), dir)
+    }
+
+    func testOnlyTheNewestBackupsAreKept() {
+        let names = ["hooks.json",
+                     "hooks.json.notchdeck-backup-100", "hooks.json.notchdeck-backup-300",
+                     "hooks.json.notchdeck-backup-200-ABCDEF12", "hooks.json.notchdeck-backup-400-1234ABCD",
+                     "hooks.json.backup", "other.json.notchdeck-backup-50"]
+        XCTAssertEqual(Set(HookInstaller.staleBackups(names, of: "hooks.json", keep: 3)),
+                       ["hooks.json.notchdeck-backup-100"])
+        XCTAssertTrue(HookInstaller.staleBackups(names, of: "hooks.json", keep: 10).isEmpty)
+    }
+}
