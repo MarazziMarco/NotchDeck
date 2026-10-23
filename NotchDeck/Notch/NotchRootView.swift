@@ -420,18 +420,21 @@ private struct PeekMarqueeText: View {
     private var scrolling: Bool { active && !reduceMotion && travel > 0 }
 
     var body: some View {
-        ZStack(alignment: .leading) {
-            if scrolling {
-                TimelineView(.animation) { context in
-                    Text(text).font(font).foregroundStyle(color).lineLimit(1).fixedSize()
-                        .offset(x: PeekMarquee.offset(at: context.date.timeIntervalSince(startedAt),
-                                                      travel: travel))
+        // The truncated line always sets the size; the scrolling copy is an
+        // overlay, so its full natural width can never widen the strip (which
+        // made the buttons jump) — it only shows through the line's own box.
+        Text(text).font(font).foregroundStyle(color).lineLimit(1).truncationMode(.tail)
+            .opacity(scrolling ? 0 : 1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .leading) {
+                if scrolling {
+                    TimelineView(.animation) { context in
+                        Text(text).font(font).foregroundStyle(color).lineLimit(1).fixedSize()
+                            .offset(x: PeekMarquee.offset(at: context.date.timeIntervalSince(startedAt),
+                                                          travel: travel))
+                    }
                 }
-            } else {
-                Text(text).font(font).foregroundStyle(color).lineLimit(1).truncationMode(.tail)
             }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .clipped()
         .mask(
             LinearGradient(stops: scrolling
