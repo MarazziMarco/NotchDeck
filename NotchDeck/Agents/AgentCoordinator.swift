@@ -262,6 +262,33 @@ final class AgentCoordinator: ObservableObject {
         )
     }
 
+    /// "Allow always <program> · this session" from the strip: allow it now and
+    /// let NotchDeck allow that program for the rest of the session.
+    @discardableResult
+    func allowAlways(sessionID: UUID, transactionID: String) async -> Bool {
+        guard let approval = store.session(id: sessionID)?.approval,
+              approval.requestID == transactionID, approval.isActionable(now: Date()) else { return false }
+        store.update(id: sessionID) {
+            guard $0.approval?.requestID == transactionID else { return }
+            $0.approval?.state = .sending
+            $0.approval?.decidedAllow = true
+        }
+        return await terminalBridge?.respondAlways(requestID: transactionID) ?? false
+    }
+
+    /// "Allow all": every request still waiting, in every session.
+    @discardableResult
+    func allowAll() async -> Int {
+        let now = Date()
+        for session in store.sessions where session.approval?.isActionable(now: now) == true {
+            store.update(id: session.id) {
+                $0.approval?.state = .sending
+                $0.approval?.decidedAllow = true
+            }
+        }
+        return await terminalBridge?.respondAllPending() ?? 0
+    }
+
     /// Transaction-specific decision boundary shared by Peek and Expanded Agents.
     /// The immutable identity is resolved against the current store immediately
     /// before state mutation, so stale snapshots and duplicate clicks are no-ops.

@@ -289,6 +289,30 @@ struct ApprovalPeekView: View {
                 ) {
                     decide(item: item, allow: true)
                 }
+                // More ways to allow: always (this program, this session) / all.
+                Menu {
+                    if let program = presentation.program {
+                        Button("Allow always “\(program)” · this session") {
+                            Task { await agents.allowAlways(sessionID: item.sessionID,
+                                                            transactionID: item.transactionID) }
+                        }
+                    }
+                    if peek.snapshot.totalCount > 1 {
+                        Button("Allow all \(peek.snapshot.totalCount) requests") {
+                            Task { await agents.allowAll() }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(DesignTokens.Palette.statusSuccess)
+                        .frame(width: 20, height: 22)
+                        .background(DesignTokens.Palette.statusSuccess.opacity(0.16), in: Capsule())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Allow always for this session, or allow all waiting requests")
                 decisionButton(
                     "Deny",
                     symbol: "xmark",

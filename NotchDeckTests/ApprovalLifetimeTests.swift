@@ -863,3 +863,58 @@ final class HousekeepingTests: XCTestCase {
         XCTAssertTrue(HookInstaller.staleBackups(names, of: "hooks.json", keep: 10).isEmpty)
     }
 }
+
+/// "Allow always" = same program, same session, while the session lives.
+final class AllowAlwaysTests: XCTestCase {
+    func testTheProgramOfAShellCommand() {
+        XCTAssertEqual(PermissionProgram.of(toolName: "Bash", action: "python3 - <<'PY' print(1) PY").label, "python3")
+        XCTAssertEqual(PermissionProgram.of(toolName: "Bash", action: "/private/tmp/launchpad-widget-preview --x").label,
+                       "launchpad-widget-preview")
+        XCTAssertEqual(PermissionProgram.of(toolName: "Bash", action: "FOO=1 BAR=2 swift test").label, "swift")
+        XCTAssertEqual(PermissionProgram.of(toolName: "Bash", action: "cd '/a b' && npm run dev").label, "npm")
+        XCTAssertEqual(PermissionProgram.of(toolName: "Bash", action: "sudo rm -rf /x").label, "sudo rm")
+    }
+
+    func testTheSameProgramMatchesAndOthersDont() {
+        let a = PermissionProgram.of(toolName: "Bash", action: "python3 a.py")
+        XCTAssertEqual(a, PermissionProgram.of(toolName: "Bash", action: "python3 -c 'x'"))
+        XCTAssertNotEqual(a, PermissionProgram.of(toolName: "Bash", action: "swift build"))
+        XCTAssertNotEqual(PermissionProgram.of(toolName: "Bash", action: "/tmp/a/tool"),
+                          PermissionProgram.of(toolName: "Bash", action: "/other/tool"))      // same name, other path
+    }
+
+    func testNonShellToolsAreKeyedByTool() {
+        let p = PermissionProgram.of(toolName: "apply_patch", action: "Apply patch to x.swift")
+        XCTAssertEqual(p.label, "apply_patch")
+        XCTAssertEqual(p, PermissionProgram.of(toolName: "apply_patch", action: "Apply patch to y.swift"))
+    }
+
+    func testRulesLiveOnlyInTheirSession() {
+        var rules = AlwaysAllowRules()
+        let s1 = UUID(), s2 = UUID()
+        let py = PermissionProgram.of(toolName: "Bash", action: "python3 x")
+        rules.allow(py, in: s1)
+        XCTAssertTrue(rules.allows(py, in: s1))
+        XCTAssertFalse(rules.allows(py, in: s2))
+        rules.forget(s1)
+        XCTAssertFalse(rules.allows(py, in: s1))
+    }
+
+    func testArcusScopes() throws {
+        func scope(_ json: String) throws -> DecisionMapper.Mode {
+            let res = try JSONDecoder().decode(AgentResolutionWire.self, from: Data(
+                #"{"id":"\#(UUID().uuidString)","decision":"accept","scope":\#(json)}"#.utf8))
+            return DecisionMapper.bridgeDecision(from: res).mode
+        }
+        XCTAssertEqual(try scope(#"{"type":"once"}"#), .once)
+        XCTAssertEqual(try scope(#"{"type":"always","pattern":"python3"}"#), .alwaysThisSession)
+        XCTAssertEqual(try scope(#"{"type":"allPending"}"#), .allPending)
+    }
+
+    func testArcusIsToldTheProgram() throws {
+        let wire = AgentRequestWire(id: UUID(), agent: "Codex · LaunchMe", summary: "q", detail: "python3 x",
+                                    riskClass: "medium", expiresAtMs: 1, program: "python3")
+        let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(wire)) as? [String: Any]
+        XCTAssertEqual(json?["program"] as? String, "python3")
+    }
+}

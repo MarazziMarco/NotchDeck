@@ -83,8 +83,12 @@ final class AppEnvironment: ObservableObject {
         let bridge = self.terminalBridge
         let coordinator = self.agents
         let sessions = store
-        self.agentDecisionService = AgentDecisionSocket(onResolve: { requestID, allow in
-            await bridge.respond(requestID: requestID, allow: allow, message: nil)
+        self.agentDecisionService = AgentDecisionSocket(onResolve: { requestID, allow, mode in
+            switch mode {
+            case .once: return await bridge.respond(requestID: requestID, allow: allow, message: nil)
+            case .alwaysThisSession: return await bridge.respondAlways(requestID: requestID)
+            case .allPending: return await bridge.respondAllPending() > 0
+            }
         }, onFocus: { tx in
             // "Details" slot in Arcus: raise the agent's terminal for this request.
             Task { @MainActor in
@@ -102,7 +106,8 @@ final class AppEnvironment: ObservableObject {
                     guard let uuid = UUID(uuidString: req.transactionID) else { return }
                     decision.notify(AgentRequestWire(
                         id: uuid, agent: req.agent, summary: req.summary, detail: req.detail,
-                        riskClass: "medium", expiresAtMs: req.expiresAt.timeIntervalSince1970 * 1000))
+                        riskClass: "medium", expiresAtMs: req.expiresAt.timeIntervalSince1970 * 1000,
+                        program: req.program))
                 }
             }
         }
