@@ -55,7 +55,9 @@ final class FileShelfStagingTests: XCTestCase {
 
     func testStagingDirectoryIsPersistentNotCaches() {
         let p = FileShelfStaging.defaultRoot.path
-        XCTAssertTrue(p.contains("Application Support/NotchDeck/FileShelf"))
+        // Shared with LaunchMe since the shared-widgets change: persistent
+        // Application Support, not owned by either app's own folder.
+        XCTAssertTrue(p.contains("Application Support/MarazziWidgets/FileShelf"))
         XCTAssertFalse(p.contains("/Caches"))
         XCTAssertFalse(p.contains("/tmp"))
         XCTAssertFalse(p.contains("/var/folders"))
