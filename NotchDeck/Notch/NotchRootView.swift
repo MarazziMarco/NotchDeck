@@ -113,9 +113,14 @@ struct ApprovalPeekView: View {
     ) -> some View {
         let actionable = item.isLocallyActionable(at: now)
         let motion = ApprovalPeekMotionPolicy(reduceMotion: appState.reduceMotion)
+        // Everything but the text stays in a fixed-height top row, so hovering
+        // (which lets the question/command grow to more lines) never moves the
+        // Allow/Deny buttons out from under the pointer.
+        let pinnedRow: CGFloat = 34
         return VStack(spacing: 0) {
-            HStack(spacing: 11) {
+            HStack(alignment: .top, spacing: 11) {
                 peekWindowControls(presentation: presentation)
+                    .frame(height: pinnedRow)
 
                 AgentProviderLogo(
                     appearance: AgentProviderAppearanceRegistry.appearance(
@@ -125,6 +130,7 @@ struct ApprovalPeekView: View {
                     size: 26,
                     darkBackground: true
                 )
+                .frame(height: pinnedRow)
                 .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -148,6 +154,7 @@ struct ApprovalPeekView: View {
                         .foregroundStyle(DesignTokens.Palette.tertiaryText)
                         .lineLimit(1)
                 }
+                .frame(height: pinnedRow)
 
                 VStack(alignment: .leading, spacing: 2) {
                     // The agent's own question first ("Posso compilare…?"), then the
@@ -183,7 +190,7 @@ struct ApprovalPeekView: View {
                             .truncationMode(.middle)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: pinnedRow, alignment: .leading)
                 .contentShape(Rectangle())
                 .onTapGesture {
                     appState.expand(face: .agents)
@@ -194,6 +201,7 @@ struct ApprovalPeekView: View {
                     presentation: presentation,
                     actionable: actionable
                 )
+                .frame(height: pinnedRow)
             }
             .padding(.horizontal, 14)
             .padding(.top, notchLayout.hasNotch ? max(7, notchLayout.physicalNotchHeight) : 9)
