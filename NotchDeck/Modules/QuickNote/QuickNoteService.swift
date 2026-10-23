@@ -5,6 +5,7 @@ import SharedWidgets
 /// One note shared locally with LaunchPad; isolated file names remain independent for tests.
 @MainActor
 final class QuickNoteService: ObservableObject {
+    @Published var title = "" { didSet { if title != oldValue { saveTitle() } } }
     @Published var text: String { didSet { scheduleSave() } }
     @Published private(set) var sharingError: String?
     private let store: JSONFileStore<String>
@@ -20,14 +21,25 @@ final class QuickNoteService: ObservableObject {
             self.sharedChannel = channel
             sharingObserver = channel.$value.sink { [weak self] note in
                 MainActor.assumeIsolated {
-                    guard let self, self.text != note.text else { return }
+                    guard let self else { return }
                     self.receivingSharedValue = true
-                    self.text = note.text
+                    if self.text != note.text {
+                        self.text = note.text
+                        self.store.save(note.text)
+                    }
+                    if note.title != self.title {
+                        self.title = SharedNote.editableTitle(note.title)
+                    }
                     self.receivingSharedValue = false
-                    self.store.save(note.text)
                 }
             }
         }
+    }
+
+    private func saveTitle() {
+        guard !receivingSharedValue, let channel = sharedChannel else { return }
+        do { try channel.update { $0.title = title }; sharingError = nil }
+        catch { sharingError = error.localizedDescription }
     }
 
     private func scheduleSave() {

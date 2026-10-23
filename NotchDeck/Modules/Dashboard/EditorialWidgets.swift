@@ -50,13 +50,17 @@ struct EditorialNote: View {
                 Path { p in p.move(to: .zero); p.addLine(to: CGPoint(x: 16, y: 0)); p.addLine(to: CGPoint(x: 0, y: 16)) }
                     .fill(paperColor.inkColor.opacity(0.10)).frame(width: 16, height: 16)
             }
-            // Editable text fills most of the sheet.
-            WidgetTextEditor(text: $service.text, placeholder: "Scrivi qui la tua nota…", ink: NSColor(paperColor.inkColor), font: .systemFont(ofSize: settings.settings.noteFontSize.points, weight: .medium))
-                .font(.system(size: settings.settings.noteFontSize.points, weight: .medium))
-                .scrollContentBackground(.hidden)
-                .foregroundStyle(paperColor.inkColor)
-                .tint(paperColor.inkColor)
-                .padding(10)
+            VStack(alignment: .leading, spacing: 6) {
+                SharedNoteTitleField(title: $service.title)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundStyle(paperColor.inkColor)
+                    .accessibilityLabel("Titolo della nota")
+                Rectangle().fill(paperColor.inkColor.opacity(0.12)).frame(height: 1)
+                WidgetTextEditor(text: $service.text, placeholder: "Scrivi qui la tua nota…", ink: NSColor(paperColor.inkColor), font: .systemFont(ofSize: settings.settings.noteFontSize.points, weight: .medium))
+                    .accessibilityLabel("Testo della nota")
+            }
+            .padding(10)
             if settings.settings.noteShowTitle {
                 Image(systemName: "pencil.and.scribble").font(.system(size: 10))
                     .foregroundStyle(paperColor.inkColor.opacity(0.5))

@@ -88,3 +88,22 @@ final class WidgetPlaceholderTextView: NSTextView {
             withAttributes: [.font: font ?? NSFont.systemFont(ofSize: 14), .foregroundColor: (textColor ?? .labelColor).withAlphaComponent(0.45)])
     }
 }
+
+
+/// Keep a displayed title separate from the legacy default value. Typing a
+/// custom title beginning with "Nota" must not reinsert or clear the hint.
+public struct SharedNoteTitleField: View {
+    @Binding private var title: String
+    @State private var draft: String
+    public init(title: Binding<String>) {
+        _title = title
+        _draft = State(initialValue: SharedNote.editableTitle(title.wrappedValue))
+    }
+    public var body: some View {
+        TextField("Nota", text: Binding(get: { draft }, set: { draft = $0; title = $0 }))
+            .accessibilityLabel("Titolo della nota")
+            .onChange(of: title) { _, value in
+                if value != draft { draft = SharedNote.editableTitle(value) }
+            }
+    }
+}

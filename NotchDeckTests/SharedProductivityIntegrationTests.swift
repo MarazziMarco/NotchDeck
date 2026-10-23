@@ -4,6 +4,32 @@ import SharedWidgets
 
 @MainActor
 final class SharedProductivityIntegrationTests: XCTestCase {
+    func testNoteTitleSyncKeepsBodyAndDefaultHintIndependent() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let notch = SharedWidgetLibrary(directory: root, migrateLegacy: false)
+        let launch = SharedWidgetLibrary(directory: root, migrateLegacy: false)
+        let note = QuickNoteService(fileName: "isolated", sharedChannel: notch.note, fileURL: root.appendingPathComponent("native-note.json"))
+        XCTAssertEqual(note.title, "", "The default Nota must be a placeholder")
+        note.text = "Il contenuto resta qui"
+        note.title = "Nota"
+        XCTAssertEqual(note.title, "Nota", "Typing a title beginning with Nota must not clear the edit")
+        note.title = "Nota personale"
+        XCTAssertEqual(note.title, "Nota personale")
+        note.title = "Idee"
+        launch.note.refresh()
+        XCTAssertEqual(launch.note.value.title, "Idee")
+        XCTAssertEqual(launch.note.value.text, "Il contenuto resta qui")
+        try launch.note.update { $0.title = "Lista della spesa" }
+        notch.note.refresh()
+        XCTAssertEqual(note.title, "Lista della spesa")
+        XCTAssertEqual(note.text, "Il contenuto resta qui")
+        note.title = ""
+        launch.note.refresh()
+        XCTAssertEqual(launch.note.value.title, "")
+        XCTAssertEqual(launch.note.value.text, "Il contenuto resta qui")
+    }
+
     func testNativePomodoroAndLaunchPadControlTheSameSession() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let name = "shared-focus-test-\(UUID().uuidString).json"

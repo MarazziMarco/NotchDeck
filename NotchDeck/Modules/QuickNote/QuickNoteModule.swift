@@ -30,13 +30,13 @@ struct QuickNoteCard: View {
 
     var body: some View {
         if size == .small {
-            ModuleSummaryCard(icon: "note.text", title: "Note",
+            ModuleSummaryCard(icon: "note.text", title: service.title.isEmpty ? "Nota" : service.title,
                               value: nil,
                               subtitle: service.isEmpty ? "Empty" : service.firstLine,
                               tint: .neutral, compact: true)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                SectionLabel(text: "Quick Note", accessory: service.isEmpty ? nil : "\(service.wordCount) words")
+                SectionLabel(text: service.title.isEmpty ? "Nota" : service.title, accessory: service.isEmpty ? nil : "\(service.wordCount) words")
                 Text(service.isEmpty ? "Tap to write a quick note…" : service.text)
                     .font(.system(size: 11))
                     .foregroundStyle(service.isEmpty ? DesignTokens.Palette.tertiaryText
@@ -55,8 +55,11 @@ struct QuickNoteFocusView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Label("Quick Note", systemImage: "note.text")
-                    .font(.headline).foregroundStyle(DesignTokens.Palette.primaryText)
+                Image(systemName: "note.text").foregroundStyle(DesignTokens.Palette.secondaryText)
+                SharedNoteTitleField(title: $service.title)
+                    .textFieldStyle(.plain).font(.headline)
+                    .foregroundStyle(DesignTokens.Palette.primaryText)
+                    .accessibilityLabel("Titolo della nota")
                 Spacer()
                 if !service.isEmpty {
                     Button("Clear") { service.text = "" }

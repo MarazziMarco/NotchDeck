@@ -110,6 +110,9 @@ public final class SharedWidgetChannel<Value: Codable & Equatable & Sendable>: O
 }
 
 public struct SharedNote: Codable, Equatable, Sendable {
+    /// The original default title is a presentation hint, not text to prefix
+    /// to the user's first edit. Existing custom titles remain untouched.
+    public static func editableTitle(_ title: String) -> String { title == "Nota" ? "" : title }
     public var title = "Nota"
     public var text = ""
     public var color = "yellow"

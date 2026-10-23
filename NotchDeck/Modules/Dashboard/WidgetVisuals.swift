@@ -314,7 +314,7 @@ struct QuickNoteWidget: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack { Image(systemName: "pencil.and.scribble").font(.system(size: 10))
-                Text("Note").font(.system(size: 11, weight: .semibold)); Spacer() }
+                SharedNoteTitleField(title: $service.title).textFieldStyle(.plain).font(.system(size: 13, weight: .semibold)).accessibilityLabel("Titolo della nota"); Spacer() }
                 .foregroundStyle(paperColor.inkColor.opacity(0.7))
             if size == .small {
                 Text(service.isEmpty ? "Tap to jot…" : service.firstLine)
