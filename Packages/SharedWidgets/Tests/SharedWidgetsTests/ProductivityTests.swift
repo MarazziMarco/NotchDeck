@@ -49,13 +49,14 @@ final class ProductivityTests: XCTestCase {
         let first = SharedWidgetLibrary(directory: directory, migrateLegacy: false)
         let original = directory.appendingPathComponent("source.txt")
         try Data("Originale intatto".utf8).write(to: original)
+        try first.shelf.update { $0.preferences.intakeMode = .reference }
         await first.shelfController.add([original])
         XCTAssertEqual(first.shelf.value.items.count, 1)
         let reference = try XCTUnwrap(first.shelf.value.items.first)
         XCTAssertTrue(reference.isReference)
         try first.shelfController.remove(reference.id)
         XCTAssertTrue(FileManager.default.fileExists(atPath: original.path))
-        try first.shelf.update { $0.preferences.copyIntoShelf = true }
+        try first.shelf.update { $0.preferences.intakeMode = .copy }
         await first.shelfController.add([original])
         let copy = try XCTUnwrap(first.shelf.value.items.first)
         let stored = try XCTUnwrap(copy.resolveURL())
@@ -117,6 +118,22 @@ final class ProductivityTests: XCTestCase {
         library.shelfController.recoverStoredFiles()
         XCTAssertEqual(library.shelf.value.items.count, 1)
     }
+    @MainActor func testShelfMovesByDefaultAndRecoversAfterReopening() async throws {
+        let first = SharedWidgetLibrary(directory: directory, migrateLegacy: false)
+        let source = directory.appendingPathComponent("to-move.txt")
+        try Data("Keep this data".utf8).write(to: source)
+        await first.shelfController.add([source])
+        XCTAssertNil(first.shelfController.errorMessage)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        let item = try XCTUnwrap(first.shelf.value.items.first)
+        XCTAssertEqual(item.originalPath, source.path)
+        let stored = try XCTUnwrap(item.resolveURL())
+        XCTAssertEqual(try String(contentsOf: stored, encoding: .utf8), "Keep this data")
+        let reopened = SharedWidgetLibrary(directory: directory, migrateLegacy: false)
+        XCTAssertEqual(reopened.shelf.value.items.first?.id, item.id)
+        XCTAssertNotNil(reopened.shelf.value.items.first?.resolveURL())
+    }
+
     func testMusicCommandsHaveOneOwnerAndAreNotReplayedAfterFailover() {
         let first = UUID(), second = UUID(), now = Date()
         var state = SharedMusic(); state.preferences.enabled = true

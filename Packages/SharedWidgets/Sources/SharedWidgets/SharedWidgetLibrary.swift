@@ -9,6 +9,7 @@ public final class SharedWidgetLibrary {
     public let shelf: SharedWidgetChannel<SharedShelf>
     public let music: SharedWidgetChannel<SharedMusic>
     public let countdown: SharedWidgetChannel<SharedCountdown>
+    public let routine: SharedWidgetChannel<RoutinePreferences>
     public let habits: SharedWidgetChannel<SharedHabits>
     public let directory: URL
     public lazy var focusController = SharedFocusController(channel: focus)
@@ -23,6 +24,7 @@ public final class SharedWidgetLibrary {
         shelf = SharedWidgetChannel(key: "file-shelf", initial: SharedShelf(), directory: directory)
         music = SharedWidgetChannel(key: "music", initial: SharedMusic(), directory: directory)
         countdown = SharedWidgetChannel(key: "countdown", initial: SharedCountdown(), directory: directory)
+        routine = SharedWidgetChannel(key: "routine", initial: RoutinePreferences(), directory: directory)
         habits = SharedWidgetChannel(key: "habits", initial: SharedHabits(), directory: directory)
         guard migrateLegacy else { return }
         let legacy = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

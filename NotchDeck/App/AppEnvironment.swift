@@ -134,6 +134,7 @@ final class AppEnvironment: ObservableObject {
             TimetableDashboardModule(),
             SharedCountdownModule(),
             SharedHabitsModule(),
+            SharedRoutineModule(),
             NowPlayingModule(),
             DownloadsModule(),
             ScreenshotModule(),

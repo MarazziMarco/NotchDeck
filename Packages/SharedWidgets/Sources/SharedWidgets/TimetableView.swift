@@ -27,6 +27,9 @@ public struct SharedTimetableView: View {
     private let isEditing: Bool
     private let presentation: TimetablePresentation
     @State private var showEditor = false
+    @State private var flipped = false
+    @State private var draftTitle = ""
+    @State private var draftRoutine = false
     @State private var selected: TimetableLessonData?
     @State private var pdfPage = 0
 
@@ -36,6 +39,35 @@ public struct SharedTimetableView: View {
     }
 
     public var body: some View {
+        WidgetFlipCard(title: "Orario settimanale", symbol: "calendar.badge.clock", flipped: $flipped, isEditing: isEditing,
+                       onEdit: { draftTitle = channel.value.timetable?.title ?? "Orario settimanale"; draftRoutine = channel.value.routineLinked == true; flipped = true },
+                       onSave: {
+            let title = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            if channel.value.timetable != nil && !draftRoutine {
+                guard !title.isEmpty else { throw TimetableImportError("Inserisci un titolo.") }
+            }
+            try channel.update { state in
+                state.routineLinked = draftRoutine
+                if state.timetable != nil && !draftRoutine { state.timetable?.title = title }
+            }
+        }) {
+            if channel.value.routineLinked == true { SharedRoutineWidget(isEditing: isEditing, page: .timetable) }
+            else { face }
+        } settings: {
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle("Usa l’orario di Routine", isOn: $draftRoutine)
+                if draftRoutine {
+                    Text("Mostra e modifica l’orario direttamente in Routine. Accedi con lo stesso account: le modifiche si sincronizzano anche con l’app sul telefono.").font(.caption).foregroundStyle(.secondary)
+                }
+                if channel.value.timetable != nil && !draftRoutine { TextField("Titolo", text: $draftTitle).textFieldStyle(.roundedBorder) }
+                Text("Orario, corsi e annotazioni sono condivisi con NotchDeck.").font(.caption).foregroundStyle(.secondary)
+                Button("Importa e gestisci JSON, CSV o PDF…") { showEditor = true }
+                Text("Apri l’editor per importare un documento, scegliere i corsi e modificare i dati.").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .sheet(isPresented: $showEditor) { SharedTimetableEditor(channel: channel) }
+    }
+    private var face: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             GeometryReader { geometry in
                 VStack(alignment: .leading, spacing: presentation == .compact ? 10 : 14) {
@@ -86,7 +118,6 @@ public struct SharedTimetableView: View {
         .clipShape(RoundedRectangle(cornerRadius: 24))
         .overlay { RoundedRectangle(cornerRadius: 24).strokeBorder(.white.opacity(0.1), lineWidth: 1) }
         .environment(\.colorScheme, .dark)
-        .sheet(isPresented: $showEditor) { SharedTimetableEditor(channel: channel) }
         .popover(item: $selected) { lesson in details(lesson).padding(18).frame(width: 290) }
         .onChange(of: channel.value.pdf?.name) { _, _ in pdfPage = 0 }
         .disabled(isEditing)
@@ -103,11 +134,7 @@ public struct SharedTimetableView: View {
                 Image(systemName: "link").font(.system(size: 11)).foregroundStyle(.white.opacity(0.4))
                     .help("Dati condivisi tra LaunchPad e NotchDeck")
             }
-            Button { showEditor = true } label: {
-                Image(systemName: "slider.horizontal.3").frame(width: 28, height: 26)
-            }
-            .buttonStyle(.plain).foregroundStyle(.white.opacity(0.7))
-            .help("Importa e configura l’orario condiviso").accessibilityLabel("Configura orario condiviso")
+            Color.clear.frame(width: 28, height: 26)
         }
     }
 

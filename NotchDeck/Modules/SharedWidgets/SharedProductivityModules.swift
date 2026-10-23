@@ -28,3 +28,21 @@ struct SharedHabitsModule: SharedCardModule {
     let widgetKind = ProductivityWidgetKind.habits
     let defaultPriority = 71
 }
+
+struct SharedRoutineModule: NotchModule {
+    let id = "sharedRoutine"
+    let displayName = "Routine · Palestra"
+    let iconName = "dumbbell"
+    let defaultEnabled = true
+    let defaultHomeFavorite = false
+    let defaultDashboardSize: ModuleDashboardSize = .large
+    let supportedSizes: [ModuleDashboardSize] = [.medium, .large]
+    let defaultGroup: ModuleGroup = .more
+    let defaultPriority = 72
+    let supportedWidgetSizes: [DashboardWidgetSize] = [.wide, .large]
+    let defaultWidgetSize: DashboardWidgetSize = .large
+    let preferredStyle: DashboardWidgetStyle = .custom
+    func makeDashboardCard(size: ModuleDashboardSize) -> AnyView { AnyView(SharedRoutineWidget()) }
+    func makeFocusView() -> AnyView { AnyView(SharedRoutineWidget()) }
+    func makeWidget(size: DashboardWidgetSize) -> AnyView { AnyView(SharedRoutineWidget()) }
+}

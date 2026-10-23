@@ -79,6 +79,7 @@ public struct TimetablePDF: Codable, Equatable, Sendable {
 
 /// The structured portion matches NotchDeck's existing state byte-for-byte in JSON shape.
 public struct SharedTimetable: Codable, Equatable, Sendable {
+    public var routineLinked: Bool?
     public var timetable: WeeklyTimetable?
     public var userData: [String: TimetableCourseState] = [:]
     public var pdf: TimetablePDF?

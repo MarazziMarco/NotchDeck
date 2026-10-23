@@ -38,11 +38,21 @@ public struct SharedShelfItem: Codable, Equatable, Sendable, Identifiable {
         return FileManager.default.fileExists(atPath: originalPath) ? URL(fileURLWithPath: originalPath) : nil
     }
 }
+public enum ShelfIntakeMode: String, Codable, CaseIterable, Sendable {
+    case move, reference, copy
+}
 public struct ShelfPreferences: Codable, Equatable, Sendable {
-    public var copyIntoShelf = false
+    public var intakeMode: ShelfIntakeMode = .move
     public var newestFirst = true
     public var showFileSize = true
     public init() {}
+    private enum CodingKeys: String, CodingKey { case intakeMode, newestFirst, showFileSize }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        intakeMode = try values.decodeIfPresent(ShelfIntakeMode.self, forKey: .intakeMode) ?? .move
+        newestFirst = try values.decodeIfPresent(Bool.self, forKey: .newestFirst) ?? true
+        showFileSize = try values.decodeIfPresent(Bool.self, forKey: .showFileSize) ?? true
+    }
 }
 public struct SharedShelf: Codable, Equatable, Sendable {
     public var items: [SharedShelfItem] = []
@@ -92,20 +102,30 @@ public struct SharedShelf: Codable, Equatable, Sendable {
         guard !isAdding else { return }
         isAdding = true; errorMessage = nil
         defer { isAdding = false }
-        let copy = channel.value.preferences.copyIntoShelf
+        channel.refresh()
+        let mode = channel.value.preferences.intakeMode
         let root = stagingDirectory
         for url in urls where url.isFileURL {
             guard !channel.value.items.contains(where: { $0.originalPath == url.path || $0.stagedPath == url.path }) else { continue }
             do {
                 let item = try await Task.detached(priority: .userInitiated) {
                     guard FileManager.default.fileExists(atPath: url.path) else { throw CocoaError(.fileNoSuchFile) }
-                    if !copy { return SharedShelfItem(reference: url) }
+                    if mode == .reference { return SharedShelfItem(reference: url) }
+                    let sourcePath = url.resolvingSymlinksInPath().standardizedFileURL.path
+                    let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
+                    guard sourcePath != rootPath, !rootPath.hasPrefix(sourcePath + "/"), !sourcePath.hasPrefix(rootPath + "/") else {
+                        throw TimetableImportError("Questo elemento contiene lo scaffale o è già al suo interno.")
+                    }
                     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
                     let incoming = root.appendingPathComponent(".incoming-" + UUID().uuidString)
                     let destination = root.appendingPathComponent(UUID().uuidString + "--" + url.lastPathComponent)
                     do {
-                        try FileManager.default.copyItem(at: url, to: incoming)
-                        try FileManager.default.moveItem(at: incoming, to: destination)
+                        if mode == .move {
+                            try FileManager.default.moveItem(at: url, to: destination)
+                        } else {
+                            try FileManager.default.copyItem(at: url, to: incoming)
+                            try FileManager.default.moveItem(at: incoming, to: destination)
+                        }
                     } catch {
                         try? FileManager.default.removeItem(at: incoming)
                         throw error

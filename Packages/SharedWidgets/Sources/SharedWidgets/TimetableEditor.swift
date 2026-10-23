@@ -53,10 +53,9 @@ public struct SharedTimetableEditor: View {
                                     validate()
                                 }
                             }
-                            TextEditor(text: Binding(get: { text }, set: {
+                            WidgetTextEditor(text: Binding(get: { text }, set: {
                                 text = $0; candidate = nil; candidatePDF = nil
-                            }))
-                                .font(.system(size: 11, design: .monospaced))
+                            }), ink: .white, paper: NSColor(white: 0.1, alpha: 1), font: .monospacedSystemFont(ofSize: 11, weight: .regular))
                                 .frame(height: 125)
                                 .accessibilityLabel("Dati dell’orario")
                             HStack {

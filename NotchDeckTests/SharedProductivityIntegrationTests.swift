@@ -45,6 +45,7 @@ final class SharedProductivityIntegrationTests: XCTestCase {
         XCTAssertEqual(shelf.add(urls: [first]), 1)
         launch.shelf.refresh()
         XCTAssertEqual(launch.shelf.value.items.count, 1)
+        try launch.shelf.update { $0.preferences.intakeMode = .reference }
         await launch.shelfController.add([second])
         notch.shelf.refresh()
         XCTAssertEqual(shelf.items.count, 2)

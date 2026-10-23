@@ -59,9 +59,11 @@ bottom to apply it and return to the front. Cancel and × discard the draft.
 Placement and widget size remain specific to each app.
 
 - **File shelf** (`file-shelf.json`, `FileShelf/`): drop files or folders, add via
-  the + button, open, reveal in Finder or drag out. Settings choose references
-  or persistent copies, ordering and file sizes. Originals stay in place when
-  added through the shared card; removing a reference leaves its original alone.
+  the + button, open, reveal in Finder or drag out. Settings choose move (default), references
+  or persistent copies, ordering and file sizes. Move removes the original from
+  its previous location after transferring it to persistent shelf storage;
+  references and explicit copies leave originals alone. Removing a reference
+  leaves its original alone.
   Explicit removal of a stored copy sends it to Trash. Committed orphan copies
   are recovered on next opening. The existing NotchDeck expanded shelf retains
   its explicit move/restore workflow; legacy staged paths remain valid.
@@ -89,3 +91,32 @@ are imported once without moving the user's files.
 `swift test` covers storage races, timer coordination, shelf copy/recovery,
 calendar-day habits, music command ownership and offscreen card rendering.
 Rendering tests write front/back PNG previews to `/private/tmp/productivity-*.png`.
+
+## Routine and reversible legacy widgets
+
+Clock, Calendar, Quick Note and Timetable also expose a gear and reversible
+settings with a fixed Save button. Notes and import text use an AppKit editor
+with explicit ink, caret and background colors so window appearance cannot
+produce white text on a white background.
+
+**Routine · Palestra** embeds the published Routine app at
+`https://tracking-daily.vercel.app` in a persistent WKWebView, in both apps.
+It exposes the actual Scheda, Oggi or Esami screens, including their editing
+controls; it does not create a second workout/event format. Sign in inside each
+app with the same Routine account. Routine's existing IndexedDB queue and
+Supabase authenticated/RLS-protected synchronization handle edits, offline
+changes and conflicts. Its current sync interval can take approximately one
+minute while both apps are open. No credentials are copied from the browser.
+
+In Timetable's reverse settings, enable **Usa l’orario di Routine** to use
+Routine's course and lesson events instead of the standalone imported archive.
+The previous JSON/CSV/PDF archive remains available if this option is disabled;
+it is not silently merged into Routine. PDFs are not automatically converted
+into exercise prescriptions; the gym card shows the plan already in Routine.
+The regular local Habits card remains independent of Routine's routines.
+
+The integration reuses the existing deployed app without modifying or deploying
+Routine. Its WKWebView login is separate from Safari/Chrome. Website navigation
+labels are read from Routine's known source and can require adapting if that
+app changes its navigation. A live unauthenticated loading smoke check was run;
+authenticated personal-data synchronization needs the user's sign-in.

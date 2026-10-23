@@ -20,7 +20,7 @@ struct SharedShelfCard: View {
                              onSave: { try channel.update { $0.preferences = draft } }) {
             VStack(spacing: 8) {
                 HStack {
-                    Text("\(channel.value.items.count) elementi").font(.system(size: 10)).foregroundStyle(.white.opacity(0.5))
+                    Text(channel.value.items.count == 1 ? "1 elemento" : "\(channel.value.items.count) elementi").font(.system(size: 10)).foregroundStyle(.white.opacity(0.5))
                     Spacer()
                     if controller.isAdding { ProgressView().controlSize(.small) }
                     Button { controller.chooseFiles() } label: { Image(systemName: "plus").frame(width: 26, height: 24) }
@@ -48,11 +48,12 @@ struct SharedShelfCard: View {
             .onDrop(of: [UTType.fileURL.identifier], isTargeted: $targeted, perform: receive)
         } settings: {
             Text("Quando aggiungi un file").fontWeight(.medium)
-            Picker("Modalità", selection: $draft.copyIntoShelf) {
-                Text("Collega").tag(false); Text("Copia").tag(true)
+            Picker("Modalità", selection: $draft.intakeMode) {
+                Text("Sposta").tag(ShelfIntakeMode.move); Text("Collega").tag(ShelfIntakeMode.reference); Text("Copia").tag(ShelfIntakeMode.copy)
             }.pickerStyle(.segmented).labelsHidden()
-            Text(draft.copyIntoShelf ? "Conserva una copia persistente nello scaffale. L’originale rimane al suo posto."
-                                    : "Mantiene un collegamento al file originale, che rimane al suo posto.")
+            Text(draft.intakeMode == .move ? "Sposta il file nello scaffale, togliendolo dalla posizione originale, come in NotchDeck."
+                 : (draft.intakeMode == .copy ? "Conserva una copia nello scaffale e lascia l’originale al suo posto."
+                    : "Collega l’originale senza spostarlo."))
                 .font(.system(size: 10)).foregroundStyle(.white.opacity(0.6)).fixedSize(horizontal: false, vertical: true)
             Toggle("Più recenti prima", isOn: $draft.newestFirst)
             Toggle("Mostra dimensione file", isOn: $draft.showFileSize)

@@ -1,4 +1,5 @@
 import SwiftUI
+import SharedWidgets
 
 // MARK: Mirror — circular
 
@@ -324,7 +325,7 @@ struct QuickNoteWidget: View {
                             : paperColor.inkColor
                     )
             } else {
-                TextEditor(text: $service.text)
+                WidgetTextEditor(text: $service.text, ink: NSColor(paperColor.inkColor), font: .systemFont(ofSize: 14))
                     .font(.system(size: 12, weight: .medium)).scrollContentBackground(.hidden)
                     .foregroundStyle(paperColor.inkColor)
             }

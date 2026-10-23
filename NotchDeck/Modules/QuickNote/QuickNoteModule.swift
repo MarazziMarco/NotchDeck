@@ -1,4 +1,5 @@
 import SwiftUI
+import SharedWidgets
 
 struct QuickNoteModule: NotchModule {
     let id = "quickNote"
@@ -12,15 +13,15 @@ struct QuickNoteModule: NotchModule {
     let defaultGroup: ModuleGroup = .home
 
     func makeDashboardCard(size: ModuleDashboardSize) -> AnyView {
-        AnyView(QuickNoteCard(size: size))
+        AnyView(NotchNoteFlip { QuickNoteCard(size: size) })
     }
-    func makeFocusView() -> AnyView { AnyView(QuickNoteFocusView()) }
+    func makeFocusView() -> AnyView { AnyView(NotchNoteFlip { QuickNoteFocusView() }) }
 
     let supportedWidgetSizes: [DashboardWidgetSize] = [.small, .medium, .large]
     let defaultWidgetSize: DashboardWidgetSize = .medium
     let preferredStyle: DashboardWidgetStyle = .sheet
     let canLiveActivity = false
-    func makeWidget(size: DashboardWidgetSize) -> AnyView { AnyView(QuickNoteWidget(size: size)) }
+    func makeWidget(size: DashboardWidgetSize) -> AnyView { AnyView(NotchNoteFlip { QuickNoteWidget(size: size) }) }
 }
 
 struct QuickNoteCard: View {
@@ -62,7 +63,7 @@ struct QuickNoteFocusView: View {
                         .buttonStyle(.borderless).controlSize(.small)
                 }
             }
-            TextEditor(text: $service.text)
+            WidgetTextEditor(text: $service.text, ink: NSColor(DesignTokens.Palette.primaryText), font: .systemFont(ofSize: 14))
                 .font(.system(size: 12))
                 .scrollContentBackground(.hidden)
                 .padding(8)
@@ -75,5 +76,40 @@ struct QuickNoteFocusView: View {
                 .font(.caption2).foregroundStyle(DesignTokens.Palette.tertiaryText)
         }
         .padding(DesignTokens.Metrics.contentPadding)
+    }
+}
+
+struct NotchNoteFlip<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    @ObservedObject private var channel = SharedWidgetLibrary.shared.note
+    @EnvironmentObject private var settings: SettingsStore
+    @State private var flipped = false
+    @State private var draft = SharedNote()
+    var body: some View {
+        WidgetFlipCard(title: "Nota rapida", symbol: "note.text", flipped: $flipped,
+                       onEdit: { draft = channel.value; flipped = true },
+                       onSave: { try channel.update { $0.title = draft.title; $0.color = draft.color } }, front: content) {
+            VStack(alignment: .leading, spacing: 12) {
+                TextField("Titolo", text: $draft.title).textFieldStyle(.roundedBorder)
+                Picker("Colore", selection: $draft.color) {
+                    Text("Giallo").tag("yellow"); Text("Pesca").tag("peach")
+                    Text("Menta").tag("mint"); Text("Lavanda").tag("lavender")
+                }
+                Text("Il testo si salva mentre scrivi ed è condiviso con LaunchPad.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .onAppear { applyColor(channel.value.color) }
+        .onChange(of: channel.value.color) { _, color in applyColor(color) }
+    }
+    private func applyColor(_ name: String) {
+        let rgb: (Double, Double, Double)
+        switch name {
+        case "peach": rgb = (1, 0.73, 0.57)
+        case "mint": rgb = (0.69, 0.87, 0.71)
+        case "lavender": rgb = (0.81, 0.76, 0.94)
+        default: rgb = (1, 0.88, 0.42)
+        }
+        let color = NotePaperColor(red: rgb.0, green: rgb.1, blue: rgb.2)
+        if settings.settings.resolvedNotePaperColor != color { settings.settings.selectCustomNoteColor(color) }
     }
 }
