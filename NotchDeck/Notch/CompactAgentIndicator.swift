@@ -34,15 +34,32 @@ struct CompactAgentIndicatorInputs: Equatable {
 struct CompactAgentProviderPresence: Equatable {
     var showsClaude = false
     var showsCodex = false
+    /// A provider is "working" while any of its sessions is running a turn;
+    /// its compact mark animates only then.
+    var claudeWorking = false
+    var codexWorking = false
 
-    init(showsClaude: Bool = false, showsCodex: Bool = false) {
+    init(showsClaude: Bool = false, showsCodex: Bool = false,
+         claudeWorking: Bool = false, codexWorking: Bool = false) {
         self.showsClaude = showsClaude
         self.showsCodex = showsCodex
+        self.claudeWorking = claudeWorking
+        self.codexWorking = codexWorking
     }
 
     init(activeSessions: [AgentSession]) {
         showsClaude = activeSessions.contains { $0.provider == .claudeCode }
         showsCodex = activeSessions.contains { $0.provider == .codex }
+        claudeWorking = activeSessions.contains { $0.provider == .claudeCode && $0.status == .running }
+        codexWorking = activeSessions.contains { $0.provider == .codex && $0.status == .running }
+    }
+
+    func isWorking(_ vendor: AgentVendor) -> Bool {
+        switch vendor {
+        case .claudeCode: return claudeWorking
+        case .codex: return codexWorking
+        default: return false
+        }
     }
 
     var leadingVendor: AgentVendor? { showsClaude ? .claudeCode : nil }
@@ -219,6 +236,12 @@ enum CompactAgentIndicatorGeometry {
     static let outerEdgeInset: CGFloat = 5
     static let iconSize: CGFloat = 20
 
+    /// Optical size correction: the Codex mark has more built-in whitespace
+    /// than Claude's, so it is drawn slightly larger to read at the same weight.
+    static func logoScale(for vendor: AgentVendor) -> CGFloat {
+        vendor == .codex ? 1.25 : 1
+    }
+
     static let rightWingRect = CGRect(x: 0, y: 0, width: wingWidth, height: 32)
     static let rightWingContentRect = CGRect(
         x: notchSafeInset,
@@ -298,6 +321,7 @@ enum CompactAgentActivityFactory {
             WingSlot(
                 pulse: urgent,
                 providerVendor: vendor,
+                providerWorking: presentation.providers.isWorking(vendor),
                 compactAgentIndicator: presentation.state,
                 compactAgentAccent: accent
             )
@@ -359,14 +383,57 @@ enum CompactNotchInteractionPolicy {
     }
 }
 
+/// How a compact provider mark moves. Pure, so the rule is testable.
+enum CompactAgentMotion: Equatable {
+    /// Open but idle, or Reduce Motion: no movement.
+    case still
+    /// Approval / input / delivery states: the restrained attention breath.
+    case breathe
+    /// The provider is running a turn: a gentle wobble plus a slow size pulse.
+    case work
+
+    static let workRotationDegrees: Double = 5
+    static let workScaleRange: ClosedRange<CGFloat> = 0.95...1.05
+
+    static func resolve(model: CompactAgentIndicatorModel, working: Bool, reduceMotion: Bool) -> Self {
+        guard model.isVisible, !reduceMotion else { return .still }
+        if case .activeSessions = model { return working ? .work : .still }
+        return .breathe
+    }
+}
+
 /// Provider-only compact mark. Urgent states use the same stable footprint and a
-/// restrained breath; no count, text or badge is ever mounted.
+/// restrained breath; a working provider wobbles and pulses gently; no count,
+/// text or badge is ever mounted.
 struct CompactAgentIndicatorView: View {
     let vendor: AgentVendor
     let model: CompactAgentIndicatorModel
+    var working = false
     var reduceMotion = false
     let activate: () -> Void
     @State private var breathing = false
+    @State private var wobbling = false
+    @State private var pulsing = false
+
+    private var motion: CompactAgentMotion {
+        .resolve(model: model, working: working, reduceMotion: reduceMotion)
+    }
+
+    private var motionScale: CGFloat {
+        switch motion {
+        case .still: return 1
+        case .breathe: return breathing ? 1.035 : 1
+        case .work:
+            let range = CompactAgentMotion.workScaleRange
+            return pulsing ? range.upperBound : range.lowerBound
+        }
+    }
+
+    private var motionRotation: Angle {
+        guard motion == .work else { return .zero }
+        let degrees = CompactAgentMotion.workRotationDegrees
+        return .degrees(wobbling ? degrees : -degrees)
+    }
 
     var body: some View {
         Button(action: activate) {
@@ -375,8 +442,9 @@ struct CompactAgentIndicatorView: View {
                 size: CompactAgentIndicatorGeometry.iconSize,
                 darkBackground: true
             )
-            .scaleEffect(breathing ? 1.035 : 1)
-            .opacity(breathing ? 0.82 : 1)
+            .scaleEffect(CompactAgentIndicatorGeometry.logoScale(for: vendor) * motionScale)
+            .rotationEffect(motionRotation)
+            .opacity(motion == .breathe && breathing ? 0.82 : 1)
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
@@ -384,6 +452,7 @@ struct CompactAgentIndicatorView: View {
         .onAppear { updateAnimation() }
         .onChange(of: reduceMotion) { _, _ in updateAnimation() }
         .onChange(of: model) { _, _ in updateAnimation() }
+        .onChange(of: working) { _, _ in updateAnimation() }
     }
 
     private var accessibilityLabel: String {
@@ -400,10 +469,28 @@ struct CompactAgentIndicatorView: View {
     }
 
     private func updateAnimation() {
-        breathing = false
-        guard model != .hidden, !reduceMotion else { return }
-        withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
-            breathing = true
+        var reset = Transaction()
+        reset.disablesAnimations = true
+        withTransaction(reset) {
+            breathing = false
+            wobbling = false
+            pulsing = false
+        }
+        switch motion {
+        case .still:
+            break
+        case .breathe:
+            withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
+                breathing = true
+            }
+        case .work:
+            // Two periods that never line up keep the movement organic.
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                wobbling = true
+            }
+            withAnimation(.easeInOut(duration: 1.3).repeatForever(autoreverses: true)) {
+                pulsing = true
+            }
         }
     }
 }

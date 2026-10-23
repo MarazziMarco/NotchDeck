@@ -48,6 +48,8 @@ struct WingSlot: Equatable {
     /// When set, the slot renders the provider's logo/monogram instead of an SF
     /// symbol (used for the compact approval + active-agent states).
     var providerVendor: AgentVendor?
+    /// The provider is running a turn (its compact mark animates).
+    var providerWorking: Bool = false
     /// Typed, normalized Agents presentation. When present, generic symbol/text/
     /// badge fields stay nil and `CompactAgentIndicatorView` owns the rendering.
     var compactAgentIndicator: CompactAgentIndicatorModel?

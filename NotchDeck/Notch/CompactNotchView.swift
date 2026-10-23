@@ -235,6 +235,7 @@ struct WingSlotView: View {
                 CompactAgentIndicatorView(
                     vendor: vendor,
                     model: model,
+                    working: slot.providerWorking,
                     reduceMotion: reduceMotion,
                     activate: activateAgent
                 )
