@@ -48,8 +48,9 @@ final class CompactAgentMotionTests: XCTestCase {
     }
 
     func testCodexLogoIsSlightlyLargerAndStaysInsideItsWing() {
-        XCTAssertEqual(CompactAgentIndicatorGeometry.logoScale(for: .claudeCode), 1)
-        XCTAssertGreaterThan(CompactAgentIndicatorGeometry.logoScale(for: .codex), 1)
+        XCTAssertGreaterThan(CompactAgentIndicatorGeometry.logoScale(for: .claudeCode), 1)
+        XCTAssertGreaterThan(CompactAgentIndicatorGeometry.logoScale(for: .codex),
+                             CompactAgentIndicatorGeometry.logoScale(for: .claudeCode))
         // Largest drawn size (Codex at the top of the working pulse) must still
         // fit the wing's notch-safe clearance.
         let peak = CompactAgentIndicatorGeometry.iconSize

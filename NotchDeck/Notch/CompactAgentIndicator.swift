@@ -236,10 +236,15 @@ enum CompactAgentIndicatorGeometry {
     static let outerEdgeInset: CGFloat = 5
     static let iconSize: CGFloat = 20
 
-    /// Optical size correction: the Codex mark has more built-in whitespace
-    /// than Claude's, so it is drawn slightly larger to read at the same weight.
+    /// Optical size of each mark in its wing. Both are drawn a little larger
+    /// than the base icon; Codex more, because its artwork carries more
+    /// built-in whitespace than Claude's.
     static func logoScale(for vendor: AgentVendor) -> CGFloat {
-        vendor == .codex ? 1.25 : 1
+        switch vendor {
+        case .codex: return 1.25
+        case .claudeCode: return 1.12
+        default: return 1
+        }
     }
 
     static let rightWingRect = CGRect(x: 0, y: 0, width: wingWidth, height: 32)
