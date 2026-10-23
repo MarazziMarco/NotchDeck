@@ -267,13 +267,29 @@ final class AgentCoordinator: ObservableObject {
     @discardableResult
     func allowAlways(sessionID: UUID, transactionID: String) async -> Bool {
         guard let approval = store.session(id: sessionID)?.approval,
-              approval.requestID == transactionID, approval.isActionable(now: Date()) else { return false }
+              approval.requestID == transactionID, approval.isActionable(now: Date()) else {
+            logIgnoredClick("Allow always", sessionID: sessionID, transactionID: transactionID)
+            return false
+        }
         store.update(id: sessionID) {
             guard $0.approval?.requestID == transactionID else { return }
             $0.approval?.state = .sending
             $0.approval?.decidedAllow = true
         }
         return await terminalBridge?.respondAlways(requestID: transactionID) ?? false
+    }
+
+    /// A click that did nothing: record why, so a strip that "ignores" a button
+    /// can be explained from ~/Library/Logs/NotchDeck/agent-requests.log.
+    private func logIgnoredClick(_ button: String, sessionID: UUID, transactionID: String) {
+        let session = store.session(id: sessionID)
+        let head = session?.approval
+        let why = session == nil ? "session gone"
+            : "current=\(head?.requestID.prefix(8) ?? "none") state=\(head.map { "\($0.state)" } ?? "—") "
+                + "queued=\(session?.queuedApprovalCount ?? 0) connected=\(session?.isBridgeConnected ?? false) "
+                + "pendingID=\(session?.pendingApprovalRequestID?.prefix(8) ?? "none")"
+        ApprovalLog.write(ApprovalLog.outcomeLine(transactionID: transactionID,
+                                                  outcome: "\(button) click ignored (\(why))"))
     }
 
     /// "Allow all": every request still waiting, in every session.
@@ -305,6 +321,7 @@ final class AgentCoordinator: ObservableObject {
               approval.isActionable(now: now),
               current.isBridgeConnected,
               current.pendingApprovalRequestID == transactionID else {
+            logIgnoredClick(allow ? "Allow" : "Deny", sessionID: sessionID, transactionID: transactionID)
             return false
         }
 
