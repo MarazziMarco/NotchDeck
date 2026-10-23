@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import SharedWidgets
 
 /// Drives `PomodoroEngine` with a wall-clock tick, persists it across launches,
 /// and fires notifications when a phase completes.
@@ -10,13 +11,16 @@ final class PomodoroService: ObservableObject, LiveActivitySource {
     /// Briefly true right after a phase completes (for the compact "done" state).
     @Published private(set) var recentlyCompleted = false
 
+    private var sharedController: SharedFocusController?
+    private var sharingObserver: AnyCancellable?
+    @Published private(set) var sharingError: String?
     private var timer: Timer?
     private let store: JSONFileStore<PomodoroEngine>
     private let notifications: NotificationServing
 
     init(config: PomodoroConfig = PomodoroConfig(),
          notifications: NotificationServing = NotificationService(),
-         fileName: String = "pomodoro.json") {
+         fileName: String = "pomodoro.json", sharedController: SharedFocusController? = nil) {
         self.store = JSONFileStore(fileName: fileName)
         self.notifications = notifications
         var restored = store.load() ?? PomodoroEngine(config: config)
@@ -24,10 +28,36 @@ final class PomodoroService: ObservableObject, LiveActivitySource {
         self.engine = restored
         // Recover: if it was running and the phase elapsed while we were away,
         // advance appropriately based on absolute timestamps.
-        recover()
+        if let shared = sharedController ?? (fileName == "pomodoro.json" ? SharedWidgetLibrary.shared.focusController : nil) {
+            self.sharedController = shared
+            sharingObserver = shared.channel.$value.sink { [weak self] value in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    do {
+                        self.engine = try JSONDecoder().decode(PomodoroEngine.self, from: JSONEncoder().encode(value.engine))
+                        self.remaining = self.engine.remaining(at: .now)
+                        if self.engine.isRunning { self.startTicking() } else { self.stopTicking() }
+                        self.store.save(self.engine)
+                        self.sharingError = nil
+                    } catch { self.sharingError = error.localizedDescription }
+                }
+            }
+            shared.onCompletion = { [weak self] phase in
+                guard let self, let finished = PomodoroPhase(rawValue: phase.rawValue) else { return }
+                self.notifyPhase(finished: finished); self.flashCompleted()
+            }
+            shared.tick()
+        } else { recover() }
     }
 
     func updateConfig(_ config: PomodoroConfig) {
+        if let shared = sharedController {
+            do {
+                let value = try JSONDecoder().decode(FocusConfig.self, from: JSONEncoder().encode(config))
+                try shared.channel.update { $0.engine.config = value }
+            } catch { sharingError = error.localizedDescription }
+            return
+        }
         engine.config = config
         persist()
     }
@@ -47,16 +77,42 @@ final class PomodoroService: ObservableObject, LiveActivitySource {
     /// Stop the active timer on explicit quit, preserving session stats. The
     /// timer will not auto-resume on next launch.
     func resetActiveStateForQuit() {
+        if sharedController != nil { stopTicking(); return }
         stopTicking()
         engine.stopKeepingStats()
         persist()
     }
 
-    func start() { engine.start(now: Date()); persist(); startTicking(); refresh() }
-    func pause() { engine.pause(now: Date()); persist(); stopTicking(); refresh() }
-    func resume() { engine.resume(now: Date()); persist(); startTicking(); refresh() }
-    func reset() { engine.reset(); persist(); stopTicking(); refresh() }
-    func skip() { engine.skip(now: Date()); persist(); refresh() }
+    func start() {
+        if let shared = sharedController {
+            do { try shared.start(); sharingError = nil } catch { sharingError = error.localizedDescription }
+            refresh(); return
+        }
+        engine.start(now: Date()); persist(); startTicking(); refresh() }
+    func pause() {
+        if let shared = sharedController {
+            do { try shared.pause(); sharingError = nil } catch { sharingError = error.localizedDescription }
+            refresh(); return
+        }
+        engine.pause(now: Date()); persist(); stopTicking(); refresh() }
+    func resume() {
+        if let shared = sharedController {
+            do { try shared.resume(); sharingError = nil } catch { sharingError = error.localizedDescription }
+            refresh(); return
+        }
+        engine.resume(now: Date()); persist(); startTicking(); refresh() }
+    func reset() {
+        if let shared = sharedController {
+            do { try shared.reset(); sharingError = nil } catch { sharingError = error.localizedDescription }
+            refresh(); return
+        }
+        engine.reset(); persist(); stopTicking(); refresh() }
+    func skip() {
+        if let shared = sharedController {
+            do { try shared.skip(); sharingError = nil } catch { sharingError = error.localizedDescription }
+            refresh(); return
+        }
+        engine.skip(now: Date()); persist(); refresh() }
 
     private func startTicking() {
         guard timer == nil else { return }
@@ -70,6 +126,9 @@ final class PomodoroService: ObservableObject, LiveActivitySource {
     private func stopTicking() { timer?.invalidate(); timer = nil }
 
     private func tick() {
+        if let shared = sharedController {
+            shared.tick(); remaining = engine.remaining(at: .now); return
+        }
         let now = Date()
         if let finished = engine.tickAdvancingIfComplete(now: now) {
             notifyPhase(finished: finished)

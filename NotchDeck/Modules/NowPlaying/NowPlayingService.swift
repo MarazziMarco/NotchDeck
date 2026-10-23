@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import SharedWidgets
 
 /// Now Playing via scriptable players (Music.app, Spotify) using public
 /// AppleScript automation.
@@ -24,16 +25,31 @@ final class NowPlayingService: ObservableObject, LiveActivitySource {
     /// Album artwork URL (Spotify exposes one; Music does not via AppleScript).
     @Published private(set) var artworkURL: URL?
 
+    private var sharedController: SharedMusicController?
+    private var sharingObserver: AnyCancellable?
+    private let sharedClient = UUID()
     private var timer: Timer?
     private let queue = DispatchQueue(label: "com.notchdeck.nowplaying")
     /// The media boundary. Injected so tests never touch osascript / Music.app.
     private let provider: NowPlayingProviding
 
-    init(provider: NowPlayingProviding = AppleScriptNowPlayingProvider()) {
+    init(provider: NowPlayingProviding = AppleScriptNowPlayingProvider(), sharedController: SharedMusicController? = nil) {
         self.provider = provider
+        if let shared = sharedController ?? (provider is AppleScriptNowPlayingProvider ? SharedWidgetLibrary.shared.musicController : nil) {
+            self.sharedController = shared
+            sharingObserver = shared.channel.$value.sink { [weak self] value in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.track = value.preferences.enabled ? value.track.map { Track(title: $0.title, artist: $0.artist, isPlaying: $0.isPlaying, app: $0.app) } : nil
+                    self.providerAvailable = value.preferences.enabled && value.providerAvailable
+                    self.artworkURL = value.track?.artworkURL.flatMap(URL.init(string:))
+                }
+            }
+        }
     }
 
     func start() {
+        if let shared = sharedController { shared.start(client: sharedClient); return }
         guard timer == nil else { return }
         poll()
         let t = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
@@ -44,9 +60,13 @@ final class NowPlayingService: ObservableObject, LiveActivitySource {
         timer = t
     }
 
-    func stop() { timer?.invalidate(); timer = nil }
+    func stop() {
+        if let shared = sharedController { shared.stop(client: sharedClient); return }
+        timer?.invalidate(); timer = nil
+    }
 
     func poll() {
+        if let shared = sharedController { shared.poll(); return }
         queue.async { [weak self, provider] in
             guard let self else { return }
             let snap = provider.snapshot()
@@ -60,12 +80,13 @@ final class NowPlayingService: ObservableObject, LiveActivitySource {
 
     /// Control commands — delegated to the provider (no-ops in the fake).
     func playPause() {
+        if let shared = sharedController { try? shared.send(.playPause); return }
         let app = track?.app
         queue.async { [provider] in provider.playPause(currentApp: app) }
         if track == nil { poll() }
     }
-    func next() { let app = track?.app; queue.async { [provider] in provider.next(currentApp: app) } }
-    func previous() { let app = track?.app; queue.async { [provider] in provider.previous(currentApp: app) } }
+    func next() { if let shared = sharedController { try? shared.send(.next); return }; let app = track?.app; queue.async { [provider] in provider.next(currentApp: app) } }
+    func previous() { if let shared = sharedController { try? shared.send(.previous); return }; let app = track?.app; queue.async { [provider] in provider.previous(currentApp: app) } }
 
     // MARK: LiveActivitySource
 

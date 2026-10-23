@@ -50,3 +50,42 @@ week grid (4×3) and overview with today's sidebar (6×4). The compact and regul
 week modes never show the sidebar, regardless of the screen resolution.
 These layouts all read the same schedule. NotchDeck can choose the presentation
 that fits its own surfaces; no NotchDeck installation is required by LaunchPad.
+
+## Productivity cards
+
+Five additional widgets work standalone and share state locally when both apps are
+installed. Use the gear to flip a card, edit its draft and press **Save** at the
+bottom to apply it and return to the front. Cancel and × discard the draft.
+Placement and widget size remain specific to each app.
+
+- **File shelf** (`file-shelf.json`, `FileShelf/`): drop files or folders, add via
+  the + button, open, reveal in Finder or drag out. Settings choose references
+  or persistent copies, ordering and file sizes. Originals stay in place when
+  added through the shared card; removing a reference leaves its original alone.
+  Explicit removal of a stored copy sends it to Trash. Committed orphan copies
+  are recovered on next opening. The existing NotchDeck expanded shelf retains
+  its explicit move/restore workflow; legacy staged paths remain valid.
+- **Pomodoro / Focus** (`focus.json`): shared session timestamps, pause/resume,
+  reset, skip and completion count. Settings choose title, focus and break
+  lengths, long-break cycle, automatic advance, completion sound and color.
+  Both apps can control the same session; only one advances it at completion.
+- **Music** (`music.json`): Music.app or Spotify metadata and transport controls.
+  Explicitly connect once; macOS may request Automation access. Settings choose
+  player, connection and artwork. A short shared lease ensures only one app polls
+  the player and executes a command. Other players are not supported. Spotify
+  supplies artwork; Music falls back to the music-note artwork.
+- **Countdown** (`countdown.json`): title, exact date/time, symbol, color and
+  seconds display. Dates use the Mac's local timezone; expired values stop at zero.
+- **Habits** (`habits.json`): up to 12 routines with name, symbol, color, daily
+  target and selected weekdays. Check-ins and streaks survive relaunch, use local
+  calendar days and are retained when card settings change. Deleting a routine
+  and saving removes its history.
+
+Native NotchDeck Focus, music live activities and file-shelf actions use these
+same records. Countdown and Habits appear in NotchDeck's module catalog under
+More; enable/add them to the desired surface. Existing shelf and timer records
+are imported once without moving the user's files.
+
+`swift test` covers storage races, timer coordination, shelf copy/recovery,
+calendar-day habits, music command ownership and offscreen card rendering.
+Rendering tests write front/back PNG previews to `/private/tmp/productivity-*.png`.

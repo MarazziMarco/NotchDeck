@@ -235,23 +235,21 @@ struct PomodoroSettingsView: View {
             Picker("Widget style", selection: $settings.settings.pomodoroWidgetStyle) {
                 ForEach(PomodoroWidgetStyle.allCases) { Text($0.label).tag($0) }
             }
-            Stepper("Focus: \(settings.settings.pomodoroWorkMinutes) min",
-                    value: $settings.settings.pomodoroWorkMinutes, in: 5...90, step: 5)
-            Stepper("Short break: \(settings.settings.pomodoroShortBreakMinutes) min",
-                    value: $settings.settings.pomodoroShortBreakMinutes, in: 1...30)
-            Stepper("Long break: \(settings.settings.pomodoroLongBreakMinutes) min",
-                    value: $settings.settings.pomodoroLongBreakMinutes, in: 5...45, step: 5)
-            Stepper("Sessions before long break: \(settings.settings.pomodoroSessionsBeforeLongBreak)",
-                    value: $settings.settings.pomodoroSessionsBeforeLongBreak, in: 2...8)
-                .onChange(of: settings.settings.pomodoroSessionsBeforeLongBreak) { _, _ in syncConfig() }
-                .onChange(of: settings.settings.pomodoroWorkMinutes) { _, _ in syncConfig() }
+            Stepper("Focus: \(pomodoro.engine.config.workMinutes) min",
+                    value: configBinding(\.workMinutes), in: 1...120)
+            Stepper("Short break: \(pomodoro.engine.config.shortBreakMinutes) min",
+                    value: configBinding(\.shortBreakMinutes), in: 1...30)
+            Stepper("Long break: \(pomodoro.engine.config.longBreakMinutes) min",
+                    value: configBinding(\.longBreakMinutes), in: 1...60)
+            Stepper("Sessions before long break: \(pomodoro.engine.config.sessionsBeforeLongBreak)",
+                    value: configBinding(\.sessionsBeforeLongBreak), in: 2...8)
         }
     }
-    private func syncConfig() {
-        pomodoro.updateConfig(PomodoroConfig(
-            workMinutes: settings.settings.pomodoroWorkMinutes,
-            shortBreakMinutes: settings.settings.pomodoroShortBreakMinutes,
-            longBreakMinutes: settings.settings.pomodoroLongBreakMinutes,
-            sessionsBeforeLongBreak: settings.settings.pomodoroSessionsBeforeLongBreak))
+    private func configBinding(_ keyPath: WritableKeyPath<PomodoroConfig, Int>) -> Binding<Int> {
+        Binding(get: { pomodoro.engine.config[keyPath: keyPath] }, set: { value in
+            var config = pomodoro.engine.config
+            config[keyPath: keyPath] = value
+            pomodoro.updateConfig(config)
+        })
     }
 }

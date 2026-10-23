@@ -127,6 +127,8 @@ final class AppEnvironment: ObservableObject {
             PomodoroModule(),
             QuickNoteModule(),
             TimetableDashboardModule(),
+            SharedCountdownModule(),
+            SharedHabitsModule(),
             NowPlayingModule(),
             DownloadsModule(),
             ScreenshotModule(),

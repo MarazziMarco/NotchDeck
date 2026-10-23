@@ -1,4 +1,5 @@
 import Foundation
+import SharedWidgets
 
 /// How File Shelf takes an item in when it is dropped.
 enum FileShelfIntakeMode: String, Codable, CaseIterable, Identifiable {
@@ -62,7 +63,7 @@ struct FileShelfStaging {
     let root: URL
 
     static var defaultRoot: URL {
-        let dir = AppPaths.supportDirectory.appendingPathComponent("FileShelf", isDirectory: true)
+        let dir = SharedWidgetPaths.directory.appendingPathComponent("FileShelf", isDirectory: true)
         AppPaths.ensureDirectory(dir)
         return dir
     }

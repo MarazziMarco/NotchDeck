@@ -1,4 +1,5 @@
 import SwiftUI
+import SharedWidgets
 
 struct FileShelfModule: NotchModule {
     let id = "fileShelf"
@@ -21,7 +22,7 @@ struct FileShelfModule: NotchModule {
 
     let supportedWidgetSizes: [DashboardWidgetSize] = [.small, .medium, .wide]
     let defaultWidgetSize: DashboardWidgetSize = .small
-    let preferredStyle: DashboardWidgetStyle = .tray
+    let preferredStyle: DashboardWidgetStyle = .custom
     let canLiveActivity = false
-    func makeWidget(size: DashboardWidgetSize) -> AnyView { AnyView(FileShelfWidget(size: size)) }
+    func makeWidget(size: DashboardWidgetSize) -> AnyView { AnyView(SharedProductivityWidget(kind: .shelf)) }
 }

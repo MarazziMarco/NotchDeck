@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import SharedWidgets
 
 /// Holds shelved items and drives the staging engine. Move-mode items are
 /// physically stored in the persistent shelf directory and survive relaunch;
@@ -21,15 +22,31 @@ final class FileShelfStore: ObservableObject {
     /// Set from settings so the store can raise the one-time explainer.
     var moveExplained = false
 
+    private var sharedChannel: SharedWidgetChannel<SharedShelf>?
+    private var sharedBaseline: [SharedShelfItem] = []
+    private var sharingObserver: AnyCancellable?
     private let engine: FileShelfStaging
     private let manifest: JSONFileStore<[FileShelfItem]>
 
     @Published private(set) var recoveredCount = 0
 
-    init(engine: FileShelfStaging = FileShelfStaging()) {
+    init(engine: FileShelfStaging = FileShelfStaging(), sharedChannel: SharedWidgetChannel<SharedShelf>? = nil) {
         self.engine = engine
         self.manifest = JSONFileStore(url: engine.manifestURL)
         self.items = manifest.load() ?? []
+        if let channel = sharedChannel ?? (engine.root.standardizedFileURL == SharedWidgetPaths.directory.appendingPathComponent("FileShelf", isDirectory: true).standardizedFileURL ? SharedWidgetLibrary.shared.shelf : nil) {
+            self.sharedChannel = channel
+            sharingObserver = channel.$value.sink { [weak self] value in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    do {
+                        self.items = try JSONDecoder().decode([FileShelfItem].self, from: JSONEncoder().encode(value.items))
+                        self.sharedBaseline = value.items
+                        self.manifest.save(self.items)
+                    } catch { self.lastError = error.localizedDescription }
+                }
+            }
+        }
         reconcile()
         recoverOrphansAtStartup()
         pruneExpired()
@@ -244,10 +261,14 @@ final class FileShelfStore: ObservableObject {
     /// Clear the shelf safely: reference entries are dropped; staged items are
     /// moved to the Trash (recoverable) rather than silently destroyed.
     func clear() {
-        for it in items where it.intakeMode == .moveIntoShelf {
-            if let url = it.resolveURL() { try? engine.moveToTrash(url) }
+        for it in items {
+            if it.intakeMode == .moveIntoShelf, let url = it.resolveURL() {
+                do { try engine.moveToTrash(url) }
+                catch { lastError = error.localizedDescription; continue }
+            }
+            items.removeAll { $0.id == it.id }
         }
-        items.removeAll(); persist()
+        persist()
     }
 
     func dismissMoveExplainer() { needsMoveExplainer = false; moveExplained = true }
@@ -286,5 +307,13 @@ final class FileShelfStore: ObservableObject {
         if items.count != before { persist() }
     }
 
-    private func persist() { manifest.save(items) }
+    private func persist() {
+        if let channel = sharedChannel {
+            do {
+                let local = try JSONDecoder().decode([SharedShelfItem].self, from: JSONEncoder().encode(items))
+                let baseline = sharedBaseline
+                try channel.update { $0.merge(local: local, baseline: baseline) }
+            } catch { lastError = error.localizedDescription }
+        } else { manifest.save(items) }
+    }
 }
