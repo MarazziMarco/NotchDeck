@@ -942,4 +942,18 @@ final class QueuedAnswerTests: XCTestCase {
         TerminalAgentBridge.applyResponseWritten(&s, requestID: "A")
         XCTAssertNil(ApprovalPeekQueue.resolve(sessions: [s]).visible)      // nothing left to answer
     }
+
+    /// Safety net: whatever event got lost, a request NotchDeck already answered
+    /// never stays on the strip as if nothing was pressed.
+    func testAnsweredRequestsStillShownAsWaitingAreCleared() {
+        var s = AgentSession(id: UUID(), provider: .claudeCode, providerSessionID: "s", title: "Notch",
+                             projectPath: "/p", status: .waitingForApproval, isManaged: false,
+                             isBridgeConnected: true, pendingApprovalRequestID: "A", approval: approval("A"))
+        s.queuedApprovals = [approval("B"), approval("C")]
+        let cleared = TerminalAgentBridge.clearAnswered(&s, answered: ["A", "B"])
+        XCTAssertEqual(Set(cleared), ["A", "B"])
+        XCTAssertEqual(ApprovalPeekQueue.resolve(sessions: [s]).items.map(\.transactionID), ["C"])
+        XCTAssertEqual(s.approval?.requestID, "C")                          // C now answerable
+        XCTAssertTrue(TerminalAgentBridge.clearAnswered(&s, answered: ["A", "B"]).isEmpty)
+    }
 }

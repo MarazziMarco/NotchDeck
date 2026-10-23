@@ -324,6 +324,9 @@ actor TerminalAgentBridge {
     private var pendingApprovals: [String: PendingApprovalConnection] = [:]
     /// "Allow always <program>" rules, per app session.
     private var alwaysAllow = AlwaysAllowRules()
+    /// Requests whose answer reached their helper, kept briefly so the sweep can
+    /// clear any that the UI still shows as waiting.
+    private var answeredAt: [String: Date] = [:]
     /// session UUID → last event time (for offline sweep).
     private var lastSeen: [UUID: Date] = [:]
 
@@ -1076,6 +1079,7 @@ actor TerminalAgentBridge {
             return false
         }
         pendingApprovals[requestID] = nil
+        answeredAt[requestID] = Date()
         externalWithdraw?(requestID)
         ApprovalLog.write(ApprovalLog.outcomeLine(transactionID: requestID,
                                                   outcome: "answered \(allow ? "allow" : "deny") in NotchDeck/Arcus"))
@@ -1210,6 +1214,24 @@ actor TerminalAgentBridge {
                 return releases
             }
             for rid in releaseRequestIDs { releaseForFallback(requestID: rid) }
+            // Safety net: an answered request must never linger as "waiting".
+            answeredAt = answeredAt.filter { now.timeIntervalSince($0.value) < 600 }
+            let answered = Set(answeredAt.keys)
+            if !answered.isEmpty {
+                let cleared: [String] = await MainActor.run { [store] in
+                    var cleared: [String] = []
+                    for session in store.sessions {
+                        store.update(id: session.id) {
+                            cleared.append(contentsOf: Self.clearAnswered(&$0, answered: answered))
+                        }
+                    }
+                    return cleared
+                }
+                for rid in cleared {
+                    ApprovalLog.write(ApprovalLog.outcomeLine(
+                        transactionID: rid, outcome: "cleared from the strip (already answered)"))
+                }
+            }
             // Heartbeat sweep: a quiet session is NOT gone. Mark it idle but keep
             // it connected and Active — only terminal presence (the tab closing)
             // moves it to Recent.
@@ -1225,6 +1247,29 @@ actor TerminalAgentBridge {
                 }
             }
         }
+    }
+
+    /// Requests already answered but still shown as waiting: drop the queued
+    /// ones and finish the current one. Returns the cleared request IDs.
+    static func clearAnswered(_ s: inout AgentSession, answered: Set<String>) -> [String] {
+        var cleared: [String] = []
+        if var queued = s.queuedApprovals {
+            let stale = queued.filter { $0.state == .pending && answered.contains($0.requestID) }
+            cleared += stale.map(\.requestID)
+            queued.removeAll { $0.state == .pending && answered.contains($0.requestID) }
+            s.queuedApprovals = queued.isEmpty ? nil : queued
+        }
+        if let head = s.approval, head.state == .pending, answered.contains(head.requestID) {
+            cleared.append(head.requestID)
+            if s.queuedApprovalCount > 0 {
+                Self.finishCurrentTransaction(&s)
+            } else {
+                s.approval?.state = .sent
+                s.pendingApprovalRequestID = nil
+                s.requiresAttention = false
+            }
+        }
+        return cleared
     }
 
     /// Expires current and queued requests independently. Expired queued entries

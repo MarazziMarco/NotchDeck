@@ -281,38 +281,7 @@ struct ApprovalPeekView: View {
             if actionable {
                 // Allow is deliberately internal; Deny occupies the trailing
                 // cursor-entry edge and the two decisions have clear separation.
-                decisionButton(
-                    "Allow",
-                    symbol: "checkmark",
-                    tint: DesignTokens.Palette.statusSuccess,
-                    accessibilityLabel: presentation.allowAccessibilityLabel
-                ) {
-                    decide(item: item, allow: true)
-                }
-                // More ways to allow: always (this program, this session) / all.
-                Menu {
-                    if let program = presentation.program {
-                        Button("Allow always “\(program)” · this session") {
-                            Task { await agents.allowAlways(sessionID: item.sessionID,
-                                                            transactionID: item.transactionID) }
-                        }
-                    }
-                    if peek.snapshot.totalCount > 1 {
-                        Button("Allow all \(peek.snapshot.totalCount) requests") {
-                            Task { await agents.allowAll() }
-                        }
-                    }
-                } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(DesignTokens.Palette.statusSuccess)
-                        .frame(width: 20, height: 22)
-                        .background(DesignTokens.Palette.statusSuccess.opacity(0.16), in: Capsule())
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("Allow always for this session, or allow all waiting requests")
+                allowSplitButton(item: item, presentation: presentation)
                 decisionButton(
                     "Deny",
                     symbol: "xmark",
@@ -335,6 +304,63 @@ struct ApprovalPeekView: View {
         }
         .font(.system(size: 10, weight: .semibold))
         .fixedSize(horizontal: true, vertical: false)
+    }
+
+    /// Allow as a split button: the left part allows once; the chevron on its
+    /// right edge opens "Allow always" / "Allow all". One capsule, one tint.
+    @ViewBuilder
+    private func allowSplitButton(item: ApprovalPeekItem,
+                                  presentation: ApprovalPeekPresentation) -> some View {
+        let tint = DesignTokens.Palette.statusSuccess
+        let program = presentation.program
+        let total = peek.snapshot.totalCount
+        let allow = { decide(item: item, allow: true) }
+        if program == nil && total <= 1 {
+            decisionButton("Allow", symbol: "checkmark", tint: tint,
+                           accessibilityLabel: presentation.allowAccessibilityLabel, action: allow)
+        } else {
+            HStack(spacing: 0) {
+                Button(action: allow) {
+                    Label("Allow", systemImage: "checkmark")
+                        .padding(.leading, 9)
+                        .padding(.trailing, 6)
+                        .padding(.vertical, 5)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(presentation.allowAccessibilityLabel)
+                Rectangle()
+                    .fill(tint.opacity(0.35))
+                    .frame(width: 1, height: 12)
+                Menu {
+                    if let program {
+                        Button("Allow always “\(program)” · this session") {
+                            Task { await agents.allowAlways(sessionID: item.sessionID,
+                                                            transactionID: item.transactionID) }
+                        }
+                    }
+                    if total > 1 {
+                        Button("Allow all \(total) requests") {
+                            Task { await agents.allowAll() }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(tint)
+                        .padding(.leading, 5)
+                        .padding(.trailing, 8)
+                        .padding(.vertical, 5)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Allow always for this session, or allow all waiting requests")
+            }
+            .foregroundStyle(tint)
+            .background(tint.opacity(0.16), in: Capsule())
+        }
     }
 
     private func decisionButton(
