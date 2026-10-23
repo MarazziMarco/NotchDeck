@@ -960,3 +960,21 @@ enum AgentSessionMerge {
         return false
     }
 }
+
+
+/// Hovering the approval strip scrolls a line that doesn't fit sideways (instead
+/// of growing the strip): by just its overflow, at a readable speed.
+enum PeekMarquee {
+    static let pointsPerSecond: CGFloat = 40
+    static let endPadding: CGFloat = 12
+    static let minimumDuration: Double = 1.0
+    static let startDelay: Double = 0.5
+
+    static func travel(textWidth: CGFloat, boxWidth: CGFloat) -> CGFloat {
+        textWidth > boxWidth ? textWidth - boxWidth + endPadding : 0
+    }
+
+    static func duration(travel: CGFloat) -> Double {
+        max(minimumDuration, Double(travel / pointsPerSecond))
+    }
+}
