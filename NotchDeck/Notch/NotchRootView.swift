@@ -403,7 +403,9 @@ struct BottomRoundedShape: InsettableShape {
 
 
 /// One line of the approval strip. While `active` (hovered) and too long for its
-/// box, it scrolls left to show the rest, then back; otherwise it truncates.
+/// box, it slides left inside its bounds (fading at the edges) to show the rest,
+/// then starts over; otherwise it truncates. Driven frame by frame from the hover
+/// start time — no implicit animation, so it can't mix with the strip's own.
 private struct PeekMarqueeText: View {
     let text: String
     let font: Font
@@ -412,7 +414,7 @@ private struct PeekMarqueeText: View {
     let reduceMotion: Bool
     @State private var textWidth: CGFloat = 0
     @State private var boxWidth: CGFloat = 0
-    @State private var offset: CGFloat = 0
+    @State private var startedAt = Date()
 
     private var travel: CGFloat { PeekMarquee.travel(textWidth: textWidth, boxWidth: boxWidth) }
     private var scrolling: Bool { active && !reduceMotion && travel > 0 }
@@ -420,14 +422,25 @@ private struct PeekMarqueeText: View {
     var body: some View {
         ZStack(alignment: .leading) {
             if scrolling {
-                Text(text).font(font).foregroundStyle(color).lineLimit(1).fixedSize()
-                    .offset(x: offset)
+                TimelineView(.animation) { context in
+                    Text(text).font(font).foregroundStyle(color).lineLimit(1).fixedSize()
+                        .offset(x: PeekMarquee.offset(at: context.date.timeIntervalSince(startedAt),
+                                                      travel: travel))
+                }
             } else {
                 Text(text).font(font).foregroundStyle(color).lineLimit(1).truncationMode(.tail)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .clipped()
+        .mask(
+            LinearGradient(stops: scrolling
+                           ? [.init(color: .clear, location: 0), .init(color: .black, location: 0.06),
+                              .init(color: .black, location: 0.94), .init(color: .clear, location: 1)]
+                           : [.init(color: .black, location: 0), .init(color: .black, location: 1)],
+                           startPoint: .leading, endPoint: .trailing)
+        )
+        .transaction { $0.animation = nil }
         .background(GeometryReader { box in
             Color.clear
                 .onAppear { boxWidth = box.size.width }
@@ -442,21 +455,7 @@ private struct PeekMarqueeText: View {
                         .onChange(of: t.size.width) { _, w in textWidth = w }
                 })
         )
-        .onChange(of: scrolling) { _, on in restart(on) }
-        .onAppear { restart(scrolling) }
+        .onChange(of: scrolling) { _, on in if on { startedAt = Date() } }
         .accessibilityLabel(text)
-    }
-
-    private func restart(_ on: Bool) {
-        if on {
-            offset = 0
-            withAnimation(.linear(duration: PeekMarquee.duration(travel: travel))
-                .delay(PeekMarquee.startDelay)
-                .repeatForever(autoreverses: true)) {
-                offset = -travel
-            }
-        } else {
-            withAnimation(.easeOut(duration: 0.15)) { offset = 0 }
-        }
     }
 }

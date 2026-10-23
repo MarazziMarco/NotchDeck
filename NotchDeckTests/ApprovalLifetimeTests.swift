@@ -827,3 +827,18 @@ final class ExternalWithdrawTests: XCTestCase {
         XCTAssertNotNil(AgentDecisionSocket.withdrawFrame(transactionID: UUID().uuidString))
     }
 }
+
+/// The scroll is a plain, readable loop: wait, slide left at a steady speed to
+/// the end, wait, start again — never bouncing back and forth.
+final class PeekMarqueeLoopTests: XCTestCase {
+    func testLoop() {
+        let travel: CGFloat = 80                                    // 2 s at 40 pt/s
+        let pause = PeekMarquee.pause
+        XCTAssertEqual(PeekMarquee.offset(at: 0, travel: travel), 0)
+        XCTAssertEqual(PeekMarquee.offset(at: pause - 0.01, travel: travel), 0)
+        XCTAssertEqual(PeekMarquee.offset(at: pause + 1, travel: travel), -40, accuracy: 0.01)
+        XCTAssertEqual(PeekMarquee.offset(at: pause + 2.5, travel: travel), -80, accuracy: 0.01)     // holds at the end
+        XCTAssertEqual(PeekMarquee.offset(at: pause * 2 + 2 + 0.01, travel: travel), 0, accuracy: 0.01) // restarts
+        XCTAssertEqual(PeekMarquee.offset(at: 5, travel: 0), 0)
+    }
+}

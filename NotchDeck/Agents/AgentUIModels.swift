@@ -977,4 +977,18 @@ enum PeekMarquee {
     static func duration(travel: CGFloat) -> Double {
         max(minimumDuration, Double(travel / pointsPerSecond))
     }
+
+    /// Wait at the start and at the end of each pass.
+    static let pause: Double = 0.9
+
+    /// Horizontal offset `elapsed` seconds into hovering: wait, slide left at a
+    /// steady speed by `travel`, wait, then start over from the beginning.
+    static func offset(at elapsed: Double, travel: CGFloat) -> CGFloat {
+        guard travel > 0, elapsed > 0 else { return 0 }
+        let slide = duration(travel: travel)
+        let t = elapsed.truncatingRemainder(dividingBy: pause + slide + pause)
+        if t < pause { return 0 }
+        if t < pause + slide { return -travel * CGFloat((t - pause) / slide) }
+        return -travel
+    }
 }
