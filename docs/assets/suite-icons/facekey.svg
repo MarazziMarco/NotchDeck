@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<!-- Suite icon, direction B ("famiglia a colori"): shared tile, light and glyph style; one hue per app. -->
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4BDB8C"/><stop offset="1" stop-color="#11935A"/></linearGradient>
+<filter id="tile" x="-10%" y="-10%" width="120%" height="125%"><feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000" flood-opacity=".35"/></filter>
+<filter id="glyph" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000" flood-opacity=".25"/></filter>
+</defs>
+<rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)" filter="url(#tile)"/>
+<rect x="101.5" y="101.5" width="821" height="821" rx="184" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="3"/>
+<g filter="url(#glyph)">
+<path d="M262 382 v-60 a60 60 0 0 1 60 -60 h60" stroke="rgba(255,255,255,.62)" stroke-width="34" stroke-linecap="round" fill="none"/><path d="M642 262 h60 a60 60 0 0 1 60 60 v60" stroke="rgba(255,255,255,.62)" stroke-width="34" stroke-linecap="round" fill="none"/>
+<path d="M762 642 v60 a60 60 0 0 1 -60 60 h-60" stroke="rgba(255,255,255,.62)" stroke-width="34" stroke-linecap="round" fill="none"/><path d="M382 762 h-60 a60 60 0 0 1 -60 -60 v-60" stroke="rgba(255,255,255,.62)" stroke-width="34" stroke-linecap="round" fill="none"/>
+<path d="M372 452 a20 20 0 0 1 20 -20 h50 v28 a24 24 0 0 0 24 24 h92 a24 24 0 0 0 24 -24 v-28 h50 a20 20 0 0 1 20 20 v196 a52 52 0 0 1 -52 52 h-176 a52 52 0 0 1 -52 -52z" fill="#FFFFFF"/>
+<circle cx="512" cy="560" r="34" fill="#11935A"/><rect x="497" y="578" width="30" height="62" rx="15" fill="#11935A"/>
+</g>
+</svg>
